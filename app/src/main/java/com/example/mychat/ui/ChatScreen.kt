@@ -1,31 +1,32 @@
 package com.example.mychat.ui
 
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.*
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.mychat.data.ChatMessage
 import com.example.mychat.data.ChatRole
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -36,16 +37,34 @@ fun ChatScreen(
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    var isClearing by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        "Gemini Chat",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleLarge
+                        "Gemini",
+                        fontWeight = FontWeight.ExtraBold,
+                        style = MaterialTheme.typography.titleLarge,
+                        letterSpacing = 1.sp
                     )
+                },
+                actions = {
+                    IconButton(onClick = {
+                        scope.launch {
+                            isClearing = true
+                            delay(300) // Let animation play
+                            viewModel.clearChat()
+                            isClearing = false
+                        }
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Brush,
+                            contentDescription = "Clear Chat",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
@@ -63,17 +82,23 @@ fun ChatScreen(
             }
         }
     ) { paddingValues ->
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(vertical = 16.dp)
+        AnimatedVisibility(
+            visible = !isClearing,
+            exit = fadeOut() + slideOutVertically { -it },
+            enter = fadeIn() + slideInVertically { it }
         ) {
-            items(uiState.messages, key = { it.id }) { message ->
-                MessageBubble(message)
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(vertical = 16.dp)
+            ) {
+                items(uiState.messages, key = { it.id }) { message ->
+                    MessageBubble(message)
+                }
             }
         }
         
@@ -153,6 +178,7 @@ fun MessageBubble(message: ChatMessage) {
 @Composable
 fun ChatInput(onSendMessage: (String) -> Unit) {
     var text by remember { mutableStateOf("") }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     Surface(
         tonalElevation = 2.dp,
@@ -160,9 +186,7 @@ fun ChatInput(onSendMessage: (String) -> Unit) {
     ) {
         Row(
             modifier = Modifier
-                .padding(16.dp)
-                .navigationBarsPadding()
-                .imePadding(),
+                .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             TextField(
@@ -184,6 +208,7 @@ fun ChatInput(onSendMessage: (String) -> Unit) {
                     if (text.isNotBlank()) {
                         onSendMessage(text)
                         text = ""
+                        keyboardController?.hide()
                     }
                 },
                 modifier = Modifier

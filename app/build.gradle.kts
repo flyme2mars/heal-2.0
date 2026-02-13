@@ -51,6 +51,7 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.graphics)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.extended)
     
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
@@ -59,7 +60,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     
     implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.vertexai)
+    implementation(libs.firebase.ai)
     implementation(libs.coil.compose)
 
     debugImplementation(libs.androidx.compose.tooling)
