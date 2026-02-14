@@ -12,7 +12,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -44,30 +44,39 @@ fun ChatScreen(
             CenterAlignedTopAppBar(
                 title = {
                     Text(
-                        "Gemini",
+                        "Remini",
                         fontWeight = FontWeight.ExtraBold,
                         style = MaterialTheme.typography.titleLarge,
                         letterSpacing = 1.sp
                     )
                 },
                 actions = {
-                    IconButton(onClick = {
-                        scope.launch {
-                            isClearing = true
-                            delay(300) // Let animation play
-                            viewModel.clearChat()
-                            isClearing = false
-                        }
-                    }) {
+                    FilledTonalIconButton(
+                        onClick = {
+                            scope.launch {
+                                isClearing = true
+                                delay(300) // Let animation play
+                                viewModel.clearChat()
+                                isClearing = false
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = IconButtonDefaults.filledTonalIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        ),
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
                         Icon(
-                            imageVector = Icons.Default.Brush,
-                            contentDescription = "Clear Chat",
-                            tint = MaterialTheme.colorScheme.primary
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "New Chat"
                         )
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    actionIconContentColor = MaterialTheme.colorScheme.onSurface
                 )
             )
         },
@@ -161,13 +170,13 @@ fun MessageBubble(message: ChatMessage) {
                     Text(
                         text = message.text,
                         color = contentColor,
-                        fontSize = 16.sp
+                        style = MaterialTheme.typography.bodyLarge
                     )
                 }
             }
         }
         Text(
-            text = if (isUser) "You" else "Gemini",
+            text = if (isUser) "You" else "Remini",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp)
@@ -181,18 +190,20 @@ fun ChatInput(onSendMessage: (String) -> Unit) {
     val keyboardController = LocalSoftwareKeyboardController.current
 
     Surface(
-        tonalElevation = 2.dp,
+        color = MaterialTheme.colorScheme.surfaceContainer,
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
-                .padding(16.dp),
+                .padding(16.dp)
+                .navigationBarsPadding()
+                .imePadding(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             TextField(
                 value = text,
                 onValueChange = { text = it },
-                placeholder = { Text("Message Gemini...") },
+                placeholder = { Text("Message Remini...") },
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(24.dp)),

@@ -11,9 +11,9 @@ val PurpleGrey40 = Color(0xFF625b71)
 val Pink40 = Color(0xFF7D5260)
 
 // Chat specific colors
-val GeminiBlue = Color(0xFF4285F4)
-val GeminiLightBlue = Color(0xFFE8F0FE)
+val ReminiBlue = Color(0xFF4285F4)
+val ReminiLightBlue = Color(0xFFE8F0FE)
 val UserChatBubble = Color(0xFF007AFF)
 val UserChatText = Color.White
-val GeminiChatBubble = Color(0xFFF0F0F0)
-val GeminiChatText = Color.Black
+val ReminiChatBubble = Color(0xFFF0F0F0)
+val ReminiChatText = Color.Black

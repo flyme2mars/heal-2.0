@@ -20,7 +20,7 @@ class ChatViewModel @Inject constructor() : ViewModel() {
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState = _uiState.asStateFlow()
 
-    // Modern 2026 Model: Gemini 2.5 Flash using Gemini Developer API
+    // Modern 2026 Model: Remini 2.5 Flash using Remini Developer API
     private val generativeModel = Firebase.ai(backend = GenerativeBackend.googleAI())
         .generativeModel("gemini-2.5-flash")
 
@@ -37,17 +37,20 @@ class ChatViewModel @Inject constructor() : ViewModel() {
             _uiState.update { it.copy(messages = it.messages + modelMessage) }
 
             try {
-                val response = chat.sendMessage(userText)
-                _uiState.update { state ->
-                    val newList = state.messages.toMutableList()
-                    val lastIndex = newList.indexOfLast { it.id == modelMessage.id }
-                    if (lastIndex != -1) {
-                        newList[lastIndex] = modelMessage.copy(
-                            text = response.text ?: "No response",
-                            isPending = false
-                        )
+                var fullResponseText = ""
+                chat.sendMessageStream(userText).collect { chunk ->
+                    fullResponseText += chunk.text ?: ""
+                    _uiState.update { state ->
+                        val newList = state.messages.toMutableList()
+                        val lastIndex = newList.indexOfLast { it.id == modelMessage.id }
+                        if (lastIndex != -1) {
+                            newList[lastIndex] = modelMessage.copy(
+                                text = fullResponseText,
+                                isPending = false
+                            )
+                        }
+                        state.copy(messages = newList)
                     }
-                    state.copy(messages = newList)
                 }
             } catch (e: Exception) {
                 android.util.Log.e("ChatViewModel", "Error sending message", e)
