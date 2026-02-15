@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mychat.data.ChatMessage
 import com.example.mychat.data.ChatRole
+import com.example.mychat.data.HealthManager
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.GenerativeBackend
@@ -15,10 +16,18 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
-class ChatViewModel @Inject constructor() : ViewModel() {
+class ChatViewModel @Inject constructor(
+    private val healthManager: HealthManager
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState = _uiState.asStateFlow()
+
+    val healthPermissions = healthManager.permissions
+
+    fun getHealthSdkStatus() = healthManager.getSdkStatus()
+    
+    fun getHealthSettingsIntent() = healthManager.getHealthConnectSettingsIntent()
 
     // Modern 2026 Model: Remini 2.5 Flash using Remini Developer API
     private val generativeModel = Firebase.ai(backend = GenerativeBackend.googleAI())
@@ -37,21 +46,33 @@ class ChatViewModel @Inject constructor() : ViewModel() {
             _uiState.update { it.copy(messages = it.messages + modelMessage) }
 
             try {
+                // Fetch health data to provide context
+                val healthSummary = if (healthManager.hasAllPermissions()) {
+                    healthManager.fetchHealthSummary()
+                } else {
+                    ""
+                }
+
+                val promptWithContext = if (healthSummary.isNotEmpty()) {
+                    "Context: $healthSummary\n\nUser Message: $userText"
+                } else {
+                    userText
+                }
+
                 var fullResponseText = ""
-                chat.sendMessageStream(userText).collect { chunk ->
+                var lastUpdateTime = System.currentTimeMillis()
+                
+                chat.sendMessageStream(promptWithContext).collect { chunk ->
                     fullResponseText += chunk.text ?: ""
-                    _uiState.update { state ->
-                        val newList = state.messages.toMutableList()
-                        val lastIndex = newList.indexOfLast { it.id == modelMessage.id }
-                        if (lastIndex != -1) {
-                            newList[lastIndex] = modelMessage.copy(
-                                text = fullResponseText,
-                                isPending = false
-                            )
-                        }
-                        state.copy(messages = newList)
+                    
+                    val now = System.currentTimeMillis()
+                    if (now - lastUpdateTime > 50) { // Update UI every 50ms
+                        updateMessage(modelMessage.id, fullResponseText, true)
+                        lastUpdateTime = now
                     }
                 }
+                // Final update to ensure everything is caught and snap to Markdown
+                updateMessage(modelMessage.id, fullResponseText, false)
             } catch (e: Exception) {
                 android.util.Log.e("ChatViewModel", "Error sending message", e)
                 val errorMessage = when {
@@ -74,19 +95,23 @@ class ChatViewModel @Inject constructor() : ViewModel() {
                     
                     else -> e.localizedMessage ?: "An unexpected error occurred"
                 }
-                _uiState.update { state ->
-                    val newList = state.messages.toMutableList()
-                    val lastIndex = newList.indexOfLast { it.id == modelMessage.id }
-                    if (lastIndex != -1) {
-                        newList[lastIndex] = modelMessage.copy(
-                            text = errorMessage,
-                            role = ChatRole.ERROR,
-                            isPending = false
-                        )
-                    }
-                    state.copy(messages = newList)
-                }
+                updateMessage(modelMessage.id, errorMessage, false, ChatRole.ERROR)
             }
+        }
+    }
+
+    private fun updateMessage(id: String, text: String, isPending: Boolean, role: ChatRole? = null) {
+        _uiState.update { state ->
+            val newList = state.messages.toMutableList()
+            val lastIndex = newList.indexOfLast { it.id == id }
+            if (lastIndex != -1) {
+                newList[lastIndex] = newList[lastIndex].copy(
+                    text = text,
+                    isPending = isPending,
+                    role = role ?: newList[lastIndex].role
+                )
+            }
+            state.copy(messages = newList)
         }
     }
 

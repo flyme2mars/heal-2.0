@@ -62,7 +62,7 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.ai)
     implementation(libs.coil.compose)
-    implementation(libs.markdown.renderer)
+    implementation(libs.androidx.health.connect)
 
     debugImplementation(libs.androidx.compose.tooling)
 }

@@ -12,7 +12,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Favorite
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.health.connect.client.PermissionController
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,6 +44,13 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     var isClearing by remember { mutableStateOf(false) }
 
+    val context = LocalContext.current
+    val healthPermissionLauncher = rememberLauncherForActivityResult(
+        PermissionController.createRequestPermissionResultContract()
+    ) { granted ->
+        Toast.makeText(context, "Permissions updated", Toast.LENGTH_SHORT).show()
+    }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -51,6 +63,33 @@ fun ChatScreen(
                     )
                 },
                 actions = {
+                    IconButton(onClick = {
+                        val status = viewModel.getHealthSdkStatus()
+                        if (status == androidx.health.connect.client.HealthConnectClient.SDK_AVAILABLE) {
+                            // Try the standard popup first
+                            healthPermissionLauncher.launch(viewModel.healthPermissions)
+                            
+                            // Also provide a way to open settings directly if popup fails
+                            Toast.makeText(context, "Opening Health Settings...", Toast.LENGTH_SHORT).show()
+                            try {
+                                context.startActivity(viewModel.getHealthSettingsIntent())
+                            } catch (e: Exception) {
+                                // Ignore if settings won't open
+                            }
+                        } else if (status == androidx.health.connect.client.HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED) {
+                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                data = android.net.Uri.parse("market://details?id=com.google.android.apps.healthdata")
+                                setPackage("com.android.vending")
+                            }
+                            context.startActivity(intent)
+                        }
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Favorite,
+                            contentDescription = "Health Connect",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
                     FilledTonalIconButton(
                         onClick = {
                             scope.launch {
@@ -160,17 +199,16 @@ fun MessageBubble(message: ChatMessage) {
                     .padding(horizontal = 16.dp, vertical = 12.dp)
                     .widthIn(max = 300.dp)
             ) {
-                if (message.isPending) {
+                if (message.isPending && message.text.isEmpty()) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
                         strokeWidth = 2.dp,
                         color = contentColor
                     )
                 } else {
-                    Text(
+                    MarkdownContent(
                         text = message.text,
-                        color = contentColor,
-                        style = MaterialTheme.typography.bodyLarge
+                        contentColor = contentColor
                     )
                 }
             }
