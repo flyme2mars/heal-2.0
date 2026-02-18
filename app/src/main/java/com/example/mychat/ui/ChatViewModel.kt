@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.mychat.data.ChatMessage
 import com.example.mychat.data.ChatRole
 import com.example.mychat.data.HealthManager
+import com.example.mychat.data.MedicalRecordManager
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.GenerativeBackend
@@ -17,7 +18,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
-    private val healthManager: HealthManager
+    private val healthManager: HealthManager,
+    private val medicalRecordManager: MedicalRecordManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -28,6 +30,26 @@ class ChatViewModel @Inject constructor(
     fun getHealthSdkStatus() = healthManager.getSdkStatus()
     
     fun getHealthSettingsIntent() = healthManager.getHealthConnectSettingsIntent()
+
+    fun loadSampleMedicalData() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncing = true) }
+            try {
+                medicalRecordManager.saveSamplePatient()
+                medicalRecordManager.saveSampleVitals()
+                _uiState.update { it.copy(
+                    messages = it.messages + ChatMessage(
+                        text = "Sample ABDM medical records loaded into local secure vault.",
+                        role = ChatRole.MODEL
+                    ),
+                    isSyncing = false
+                ) }
+            } catch (e: Exception) {
+                android.util.Log.e("ChatViewModel", "Failed to load samples", e)
+                _uiState.update { it.copy(isSyncing = false) }
+            }
+        }
+    }
 
     // Modern 2026 Model: Remini 2.5 Flash using Remini Developer API
     private val generativeModel = Firebase.ai(backend = GenerativeBackend.googleAI())
@@ -53,10 +75,12 @@ class ChatViewModel @Inject constructor(
                     ""
                 }
 
-                val promptWithContext = if (healthSummary.isNotEmpty()) {
-                    "Context: $healthSummary\n\nUser Message: $userText"
-                } else {
-                    userText
+                val medicalSummary = medicalRecordManager.getMedicalSummary()
+
+                val promptWithContext = buildString {
+                    if (healthSummary.isNotEmpty()) append("Health Connect Context:\n$healthSummary\n\n")
+                    append("ABDM Medical Records Context:\n$medicalSummary\n\n")
+                    append("User Message: $userText")
                 }
 
                 var fullResponseText = ""
@@ -122,5 +146,6 @@ class ChatViewModel @Inject constructor(
 }
 
 data class ChatUiState(
-    val messages: List<ChatMessage> = emptyList()
+    val messages: List<ChatMessage> = emptyList(),
+    val isSyncing: Boolean = false
 )

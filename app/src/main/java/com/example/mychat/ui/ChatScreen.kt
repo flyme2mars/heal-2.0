@@ -16,6 +16,13 @@ import androidx.compose.ui.platform.LocalContext
 import android.widget.Toast
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.ui.draw.rotate
+import androidx.compose.material.icons.filled.Sync
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.health.connect.client.PermissionController
 import androidx.compose.material3.*
@@ -88,6 +95,27 @@ fun ChatScreen(
                             imageVector = Icons.Default.Favorite,
                             contentDescription = "Health Connect",
                             tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    IconButton(
+                        onClick = { viewModel.loadSampleMedicalData() },
+                        enabled = !uiState.isSyncing
+                    ) {
+                        val infiniteTransition = rememberInfiniteTransition(label = "SyncRotation")
+                        val rotation by infiniteTransition.animateFloat(
+                            initialValue = 0f,
+                            targetValue = 360f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(1000, easing = LinearEasing)
+                            ),
+                            label = "SyncRotation"
+                        )
+                        
+                        Icon(
+                            imageVector = Icons.Default.Sync,
+                            contentDescription = "Sync ABDM",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = if (uiState.isSyncing) Modifier.rotate(rotation) else Modifier
                         )
                     }
                     FilledTonalIconButton(

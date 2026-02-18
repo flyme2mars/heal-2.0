@@ -32,6 +32,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
 }
 
@@ -43,6 +44,7 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEa
 }
 
 dependencies {
+    coreLibraryDesugaring(libs.android.desugar.jdk.libs)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.activity.compose)
@@ -63,6 +65,23 @@ dependencies {
     implementation(libs.firebase.ai)
     implementation(libs.coil.compose)
     implementation(libs.androidx.health.connect)
+    implementation(libs.google.fhir.engine)
 
     debugImplementation(libs.androidx.compose.tooling)
+}
+
+android {
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/ASL2.0"
+            excludes += "META-INF/ASL-2.0.txt"
+            excludes += "META-INF/LGPL-3.0.txt"
+            excludes += "META-INF/LICENSE.md"
+            excludes += "META-INF/LICENSE-notice.md"
+            excludes += "META-INF/NOTICE.md"
+            excludes += "META-INF/sun-jaxb.properties"
+            excludes += "META-INF/DEPENDENCIES"
+        }
+    }
 }
