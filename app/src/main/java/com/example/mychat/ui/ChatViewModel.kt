@@ -6,24 +6,42 @@ import com.example.mychat.data.ChatMessage
 import com.example.mychat.data.ChatRole
 import com.example.mychat.data.HealthManager
 import com.example.mychat.data.MedicalRecordManager
+import com.example.mychat.data.DocumentManager
+import com.example.mychat.data.HealthDocument
+import com.example.mychat.data.HealthDocumentEntity
+import android.net.Uri
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.GenerativeBackend
+import com.google.firebase.ai.type.content
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val healthManager: HealthManager,
-    private val medicalRecordManager: MedicalRecordManager
+    private val medicalRecordManager: MedicalRecordManager,
+    private val documentManager: DocumentManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
-    val uiState = _uiState.asStateFlow()
+    
+    val uiState: StateFlow<ChatUiState> = combine(
+        _uiState,
+        documentManager.getAllDocuments()
+    ) { state, docs ->
+        state.copy(documents = docs.map { 
+            HealthDocument(it.id, it.name, it.type, it.internalPath, it.timestamp) 
+        })
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ChatUiState())
 
     val healthPermissions = healthManager.permissions
 
@@ -31,12 +49,37 @@ class ChatViewModel @Inject constructor(
     
     fun getHealthSettingsIntent() = healthManager.getHealthConnectSettingsIntent()
 
+    fun uploadDocument(uri: Uri, name: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncing = true) }
+            val doc = documentManager.saveDocument(uri, name)
+            if (doc != null) {
+                _uiState.update { it.copy(
+                    messages = it.messages + ChatMessage(
+                        text = "Document '${name}' uploaded securely to vault.",
+                        role = ChatRole.MODEL
+                    ),
+                    isSyncing = false
+                ) }
+            } else {
+                _uiState.update { it.copy(isSyncing = false) }
+            }
+        }
+    }
+
+    fun deleteDocument(document: HealthDocument) {
+        viewModelScope.launch {
+            documentManager.deleteDocument(document)
+        }
+    }
+
     fun loadSampleMedicalData() {
         viewModelScope.launch {
             _uiState.update { it.copy(isSyncing = true) }
             try {
                 medicalRecordManager.saveSamplePatient()
                 medicalRecordManager.saveSampleVitals()
+                refreshMedicalSummary()
                 _uiState.update { it.copy(
                     messages = it.messages + ChatMessage(
                         text = "Sample ABDM medical records loaded into local secure vault.",
@@ -48,6 +91,13 @@ class ChatViewModel @Inject constructor(
                 android.util.Log.e("ChatViewModel", "Failed to load samples", e)
                 _uiState.update { it.copy(isSyncing = false) }
             }
+        }
+    }
+
+    fun refreshMedicalSummary() {
+        viewModelScope.launch {
+            val summary = medicalRecordManager.getMedicalSummary()
+            _uiState.update { it.copy(medicalSummary = summary) }
         }
     }
 
@@ -77,16 +127,31 @@ class ChatViewModel @Inject constructor(
 
                 val medicalSummary = medicalRecordManager.getMedicalSummary()
 
-                val promptWithContext = buildString {
-                    if (healthSummary.isNotEmpty()) append("Health Connect Context:\n$healthSummary\n\n")
-                    append("ABDM Medical Records Context:\n$medicalSummary\n\n")
-                    append("User Message: $userText")
+                val promptContent = content {
+                    // 1. Add all PDFs from the vault as context
+                    uiState.value.documents.filter { it.type == "pdf" }.forEach { doc ->
+                        try {
+                            val inputStream = documentManager.getDocumentDecryptStream(doc)
+                            val bytes = inputStream.readBytes()
+                            inputStream.close()
+                            inlineData(bytes, "application/pdf")
+                        } catch (e: Exception) {
+                            android.util.Log.e("ChatViewModel", "Failed to attach PDF: ${doc.name}", e)
+                        }
+                    }
+
+                    // 2. Add Health Connect and ABDM text context
+                    if (healthSummary.isNotEmpty()) text("Health Connect Context:\n$healthSummary\n\n")
+                    text("ABDM Medical Records Context:\n$medicalSummary\n\n")
+                    
+                    // 3. Add the user prompt
+                    text(userText)
                 }
 
                 var fullResponseText = ""
                 var lastUpdateTime = System.currentTimeMillis()
                 
-                chat.sendMessageStream(promptWithContext).collect { chunk ->
+                chat.sendMessageStream(promptContent).collect { chunk ->
                     fullResponseText += chunk.text ?: ""
                     
                     val now = System.currentTimeMillis()
@@ -147,5 +212,7 @@ class ChatViewModel @Inject constructor(
 
 data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
-    val isSyncing: Boolean = false
+    val isSyncing: Boolean = false,
+    val medicalSummary: String = "No medical records found.",
+    val documents: List<HealthDocument> = emptyList()
 )

@@ -23,6 +23,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.ui.draw.rotate
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.health.connect.client.PermissionController
 import androidx.compose.material3.*
@@ -44,12 +47,14 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
+    onNavigateToVault: () -> Unit,
     viewModel: ChatViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var isClearing by remember { mutableStateOf(false) }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
     val context = LocalContext.current
     val healthPermissionLauncher = rememberLauncherForActivityResult(
@@ -58,130 +63,170 @@ fun ChatScreen(
         Toast.makeText(context, "Permissions updated", Toast.LENGTH_SHORT).show()
     }
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = {
-                    Text(
-                        "Remini",
-                        fontWeight = FontWeight.ExtraBold,
-                        style = MaterialTheme.typography.titleLarge,
-                        letterSpacing = 1.sp
-                    )
-                },
-                actions = {
-                    IconButton(onClick = {
-                        val status = viewModel.getHealthSdkStatus()
-                        if (status == androidx.health.connect.client.HealthConnectClient.SDK_AVAILABLE) {
-                            // Try the standard popup first
-                            healthPermissionLauncher.launch(viewModel.healthPermissions)
-                            
-                            // Also provide a way to open settings directly if popup fails
-                            Toast.makeText(context, "Opening Health Settings...", Toast.LENGTH_SHORT).show()
-                            try {
-                                context.startActivity(viewModel.getHealthSettingsIntent())
-                            } catch (e: Exception) {
-                                // Ignore if settings won't open
-                            }
-                        } else if (status == androidx.health.connect.client.HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED) {
-                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                                data = android.net.Uri.parse("market://details?id=com.google.android.apps.healthdata")
-                                setPackage("com.android.vending")
-                            }
-                            context.startActivity(intent)
-                        }
-                    }) {
-                        Icon(
-                            imageVector = Icons.Default.Favorite,
-                            contentDescription = "Health Connect",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    IconButton(
-                        onClick = { viewModel.loadSampleMedicalData() },
-                        enabled = !uiState.isSyncing
-                    ) {
-                        val infiniteTransition = rememberInfiniteTransition(label = "SyncRotation")
-                        val rotation by infiniteTransition.animateFloat(
-                            initialValue = 0f,
-                            targetValue = 360f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(1000, easing = LinearEasing)
-                            ),
-                            label = "SyncRotation"
-                        )
-                        
-                        Icon(
-                            imageVector = Icons.Default.Sync,
-                            contentDescription = "Sync ABDM",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = if (uiState.isSyncing) Modifier.rotate(rotation) else Modifier
-                        )
-                    }
-                    FilledTonalIconButton(
-                        onClick = {
-                            scope.launch {
-                                isClearing = true
-                                delay(300) // Let animation play
-                                viewModel.clearChat()
-                                isClearing = false
-                            }
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = IconButtonDefaults.filledTonalIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        ),
-                        modifier = Modifier.padding(end = 8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "New Chat"
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                    actionIconContentColor = MaterialTheme.colorScheme.onSurface
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Remini Menu",
+                    modifier = Modifier.padding(16.dp),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
                 )
-            )
-        },
-        bottomBar = {
-            ChatInput { text ->
-                viewModel.sendMessage(text)
-                scope.launch {
-                    if (uiState.messages.isNotEmpty()) {
-                        listState.animateScrollToItem(uiState.messages.size - 1)
+                NavigationDrawerItem(
+                    label = { Text("Chat") },
+                    selected = true,
+                    onClick = { scope.launch { drawerState.close() } },
+                    icon = { Icon(Icons.Default.Chat, contentDescription = null) },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+                NavigationDrawerItem(
+                    label = { Text("Health Data Vault") },
+                    selected = false,
+                    onClick = { 
+                        scope.launch { 
+                            drawerState.close() 
+                            onNavigateToVault()
+                        }
+                    },
+                    icon = { Icon(Icons.Default.HealthAndSafety, contentDescription = null) },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+            }
+        }
+    ) {
+        Scaffold(
+            topBar = {
+                CenterAlignedTopAppBar(
+                    title = {
+                        Text(
+                            "Remini",
+                            fontWeight = FontWeight.ExtraBold,
+                            style = MaterialTheme.typography.titleLarge,
+                            letterSpacing = 1.sp
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Default.Menu, contentDescription = "Menu")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = {
+                            val status = viewModel.getHealthSdkStatus()
+                            if (status == androidx.health.connect.client.HealthConnectClient.SDK_AVAILABLE) {
+                                try {
+                                    healthPermissionLauncher.launch(viewModel.healthPermissions)
+                                } catch (e: Exception) {
+                                    try {
+                                        val intent = android.content.Intent("androidx.health.ACTION_HEALTH_CONNECT_SETTINGS")
+                                        context.startActivity(intent)
+                                        Toast.makeText(context, "Please enable Remini in Settings", Toast.LENGTH_LONG).show()
+                                    } catch (e2: Exception) {
+                                        Toast.makeText(context, "Could not open Health Connect settings", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            } else if (status == androidx.health.connect.client.HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED) {
+                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                                    data = android.net.Uri.parse("market://details?id=com.google.android.apps.healthdata")
+                                    setPackage("com.android.vending")
+                                }
+                                context.startActivity(intent)
+                            }
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.Favorite,
+                                contentDescription = "Health Connect",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        IconButton(
+                            onClick = { viewModel.loadSampleMedicalData() },
+                            enabled = !uiState.isSyncing
+                        ) {
+                            val infiniteTransition = rememberInfiniteTransition(label = "SyncRotation")
+                            val rotation by infiniteTransition.animateFloat(
+                                initialValue = 0f,
+                                targetValue = 360f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(1000, easing = LinearEasing)
+                                ),
+                                label = "SyncRotation"
+                            )
+                            
+                            Icon(
+                                imageVector = Icons.Default.Sync,
+                                contentDescription = "Sync ABDM",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = if (uiState.isSyncing) Modifier.rotate(rotation) else Modifier
+                            )
+                        }
+                        FilledTonalIconButton(
+                            onClick = {
+                                scope.launch {
+                                    isClearing = true
+                                    delay(300) // Let animation play
+                                    viewModel.clearChat()
+                                    isClearing = false
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                            ),
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "New Chat"
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface,
+                        actionIconContentColor = MaterialTheme.colorScheme.onSurface
+                    )
+                )
+            },
+            bottomBar = {
+                ChatInput { text ->
+                    viewModel.sendMessage(text)
+                    scope.launch {
+                        if (uiState.messages.isNotEmpty()) {
+                            listState.animateScrollToItem(uiState.messages.size - 1)
+                        }
                     }
                 }
             }
-        }
-    ) { paddingValues ->
-        AnimatedVisibility(
-            visible = !isClearing,
-            exit = fadeOut() + slideOutVertically { -it },
-            enter = fadeIn() + slideInVertically { it }
-        ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(vertical = 16.dp)
+        ) { paddingValues ->
+            AnimatedVisibility(
+                visible = !isClearing,
+                exit = fadeOut() + slideOutVertically { -it },
+                enter = fadeIn() + slideInVertically { it }
             ) {
-                items(uiState.messages, key = { it.id }) { message ->
-                    MessageBubble(message)
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(paddingValues)
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(vertical = 16.dp)
+                ) {
+                    items(uiState.messages, key = { it.id }) { message ->
+                        MessageBubble(message)
+                    }
                 }
             }
-        }
-        
-        // Auto-scroll on new message
-        LaunchedEffect(uiState.messages.size) {
-            if (uiState.messages.isNotEmpty()) {
-                listState.animateScrollToItem(uiState.messages.size - 1)
+            
+            // Auto-scroll on new message
+            LaunchedEffect(uiState.messages.size) {
+                if (uiState.messages.isNotEmpty()) {
+                    listState.animateScrollToItem(uiState.messages.size - 1)
+                }
             }
         }
     }

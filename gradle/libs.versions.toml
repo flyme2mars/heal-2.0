@@ -34,7 +34,11 @@ firebase-ai = { group = "com.google.firebase", name = "firebase-ai" }
 coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 androidx-health-connect = { group = "androidx.health.connect", name = "connect-client", version = "1.1.0-alpha10" }
 google-fhir-engine = { group = "com.google.android.fhir", name = "engine", version = "1.2.0" }
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version = "1.1.0-alpha06" }
 android-desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version = "2.1.5" }
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

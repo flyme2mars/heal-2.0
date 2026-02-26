@@ -66,6 +66,10 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.androidx.health.connect)
     implementation(libs.google.fhir.engine)
+    implementation(libs.androidx.security.crypto)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
     debugImplementation(libs.androidx.compose.tooling)
 }
