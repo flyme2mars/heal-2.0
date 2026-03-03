@@ -62,7 +62,8 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     
     implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.ai)
+    implementation(libs.okhttp)
+    implementation(libs.okhttp.sse)
     implementation(libs.coil.compose)
     implementation(libs.androidx.health.connect)
     implementation(libs.google.fhir.engine)

@@ -6,30 +6,17 @@ import { ChatRequest } from "@/types/chat";
 
 export async function POST(req: NextRequest) {
   try {
-    // 1. Security Check (Firebase App Check)
-    if (process.env.NODE_ENV === "production") {
-      const appCheckToken = req.headers.get("X-Firebase-AppCheck");
-      await verifyAppCheck(appCheckToken || undefined);
-    }
+    const { prompt, context } = await req.json();
+    if (!prompt) return NextResponse.json({ error: "No prompt" }, { status: 400 });
 
-    // 2. Parse the Request
-    const body: ChatRequest = await req.json();
-    const { prompt, context } = body;
-
-    if (!prompt) {
-      return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
-    }
-
-    // 3. Construct System Instruction
     const systemInstruction = `
       You are Remini, a secure health AI agent.
       
       HEALTH CONTEXT:
-      - Steps (today): ${context.health_connect?.steps || 'No data'}
-      - Heart Rate (avg): ${context.health_connect?.avg_hr || 'No data'} bpm
+      ${context.health_connect ? Object.entries(context.health_connect).map(([k, v]) => `- ${k}: ${v}`).join('\n') : 'No data'}
       
       MEDICAL HISTORY:
-      ${context.fhir_records?.map(r => `- ${r.resourceType}: ${JSON.stringify(r)}`).join('\n') || 'No records found.'}
+      ${context.fhir_records?.join('\n') || 'No records found.'}
       
       MEMORY (Markdown files):
       ${Object.entries(context.memory_snapshot).map(([file, content]) => `File: ${file}\n${content}`).join('\n---\n')}
@@ -39,14 +26,37 @@ export async function POST(req: NextRequest) {
       2. Maintain a professional yet magical health companion persona.
     `;
 
-    // 4. Stream Response
-    const result = await streamText({
-      model: google("gemini-1.5-flash"),
+    console.log("Starting AI stream with model: gemini-2.5-flash");
+
+    const result = streamText({
+      model: google("gemini-2.5-flash"),
       system: systemInstruction,
       prompt: prompt,
     });
 
-    return result.toTextStreamResponse();
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          for await (const chunk of result.textStream) {
+            // Format as Vercel-compatible SSE: data: 0:"token"\n\n
+            const sseChunk = `data: 0:${JSON.stringify(chunk)}\n\n`;
+            controller.enqueue(new TextEncoder().encode(sseChunk));
+          }
+          controller.close();
+        } catch (e) {
+          console.error("Stream error:", e);
+          controller.error(e);
+        }
+      }
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+      }
+    });
   } catch (error: any) {
     console.error("Chat API error:", error);
     return NextResponse.json(

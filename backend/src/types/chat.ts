@@ -1,13 +1,5 @@
 export interface HealthConnectData {
-  steps?: number;
-  avg_hr?: number;
-  [key: string]: any;
-}
-
-export interface MedicalRecord {
-  resourceType: string;
-  id: string;
-  [key: string]: any;
+  [key: string]: string;
 }
 
 export interface MemorySnapshot {
@@ -18,7 +10,7 @@ export interface ChatRequest {
   prompt: string;
   context: {
     health_connect?: HealthConnectData;
-    fhir_records?: MedicalRecord[];
+    fhir_records?: string[];
     memory_snapshot: MemorySnapshot;
   };
 }

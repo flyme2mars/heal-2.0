@@ -100,4 +100,13 @@ class DocumentManager @Inject constructor(
             android.util.Log.e("DocumentManager", "Failed to delete document: ${document.name}", e)
         }
     }
+
+    fun getMemorySnapshot(): Map<String, String> {
+        val memoryDir = File(context.filesDir, "memory")
+        if (!memoryDir.exists()) memoryDir.mkdirs()
+        
+        return memoryDir.listFiles { _, name -> name.endsWith(".md") }?.associate { file ->
+            file.name to file.readText()
+        } ?: emptyMap()
+    }
 }
