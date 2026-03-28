@@ -6,7 +6,6 @@ plugins {
     alias(libs.plugins.ksp)
     // Applying Hilt via alias, relying on legacyVariantApi=true in properties
     alias(libs.plugins.hilt)
-    alias(libs.plugins.google.services)
     alias(libs.plugins.secrets)
 }
 
@@ -61,7 +60,6 @@ dependencies {
     implementation(libs.androidx.hilt.navigation.compose)
     implementation(libs.kotlinx.serialization.json)
     
-    implementation(platform(libs.firebase.bom))
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
     implementation(libs.coil.compose)

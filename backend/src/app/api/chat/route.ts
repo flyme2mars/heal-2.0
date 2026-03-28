@@ -2,30 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { google } from "@ai-sdk/google";
 import { streamText } from "ai";
 import { z } from "zod";
-import { verifyAppCheck } from "@/lib/firebase";
 import { ChatRequest } from "@/types/chat";
 
 export async function POST(req: NextRequest) {
   try {
-    // 1. Log incoming request for Vercel Debugging
-    console.log("Chat API Request Received");
+    console.log("Chat API Request Received (Firebase Removed)");
 
-    // 2. Parse the Request
     const body: ChatRequest = await req.json();
     const { prompt, context } = body;
 
     if (!prompt) return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
-
-    // 3. Optional App Check (Relaxed for initial cloud testing)
-    try {
-      if (process.env.NODE_ENV === "production" && process.env.ENABLE_APP_CHECK === "true") {
-        const appCheckToken = req.headers.get("X-Firebase-AppCheck");
-        await verifyAppCheck(appCheckToken || undefined);
-      }
-    } catch (authError: any) {
-      console.error("Auth Warning:", authError.message);
-      // We'll continue for now to allow testing, but log it.
-    }
 
     const systemInstruction = `
       You are Heal 2.0, a secure health AI agent.
@@ -67,6 +53,7 @@ export async function POST(req: NextRequest) {
             if (part.type === 'text-delta') {
               controller.enqueue(encoder.encode(`data: 0:${JSON.stringify(part.text)}\n\n`));
             } else if (part.type === 'tool-call') {
+              console.log("AI requested tool:", part.toolName);
               controller.enqueue(encoder.encode(`data: 9:${JSON.stringify({
                 toolCallId: part.toolCallId,
                 toolName: part.toolName,
@@ -92,8 +79,7 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     console.error("PRODUCTION ERROR:", error.stack || error.message);
     return NextResponse.json({ 
-      error: error.message,
-      detail: "Check Vercel logs for full stack trace"
+      error: error.message
     }, { status: 500 });
   }
 }
