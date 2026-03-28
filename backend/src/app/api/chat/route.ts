@@ -6,7 +6,7 @@ import { ChatRequest } from "@/types/chat";
 
 export async function POST(req: NextRequest) {
   try {
-    console.log("Chat API Request Received (Persona Update)");
+    console.log("Chat API Request Received (Model: 3.1 Flash-Lite)");
 
     const body: ChatRequest = await req.json();
     const { prompt, context } = body;
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     `;
 
     const result = streamText({
-      model: google("gemini-2.5-flash"),
+      model: google("gemini-3.1-flash-lite-preview"),
       system: systemInstruction,
       prompt: prompt,
       tools: {
@@ -64,6 +64,7 @@ export async function POST(req: NextRequest) {
             if (part.type === 'text-delta') {
               controller.enqueue(encoder.encode(`data: 0:${JSON.stringify(part.text)}\n\n`));
             } else if (part.type === 'tool-call') {
+              console.log("AI requested tool:", part.toolName);
               controller.enqueue(encoder.encode(`data: 9:${JSON.stringify({
                 toolCallId: part.toolCallId,
                 toolName: part.toolName,
@@ -88,6 +89,8 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error("PRODUCTION ERROR:", error.stack || error.message);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ 
+      error: error.message
+    }, { status: 500 });
   }
 }
