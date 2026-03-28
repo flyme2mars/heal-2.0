@@ -6,12 +6,14 @@ import { ChatRequest } from "@/types/chat";
 
 export async function POST(req: NextRequest) {
   try {
-    console.log("Chat API Request Received (Model: 3.1 Flash-Lite, Multimodal)");
+    console.log("Chat API Request Received (Model: 3.1 Flash-Lite, Multimodal Array)");
 
     const body: ChatRequest = await req.json();
     const { prompt, context, attachments } = body;
 
-    if (!prompt) return NextResponse.json({ error: "Missing prompt" }, { status: 400 });
+    if (!prompt && !attachments?.length) {
+      return NextResponse.json({ error: "Missing prompt or attachment" }, { status: 400 });
+    }
 
     const systemInstruction = `
       You are Heal 2.0, a professional and friendly health AI assistant. 
@@ -25,8 +27,6 @@ export async function POST(req: NextRequest) {
 
       VISION GUIDELINES:
       - If the user provides an image, analyze it carefully. 
-      - If it is a medical report, extract the key findings.
-      - If it is a photo of a symptom (like a rash), describe what you see neutrally and recommend appropriate steps (e.g., "This appears to be X, you should consult a dermatologist").
       - Always state that you are an AI and your analysis is for informational purposes only.
 
       CONTEXT:
@@ -35,17 +35,22 @@ export async function POST(req: NextRequest) {
       - Internal Memory: ${Object.entries(context.memory_snapshot).map(([file, content]) => `File ${file}: ${content}`).join('\n')}
     `;
 
-    // Convert attachments to AI SDK format
-    const experimental_attachments = attachments?.map(att => ({
-      url: att.url,
-      contentType: "image/jpeg", // Assuming JPEG for now
-    }));
-
+    // Use specific content parts for multimodal support
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
       system: systemInstruction,
-      prompt: prompt,
-      experimental_attachments,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt || "Please analyze this image." },
+            ...(attachments || []).map(att => ({
+              type: "image" as const,
+              image: att.url,
+            }))
+          ]
+        }
+      ],
       tools: {
         update_memory: {
           description: "Update a memory file stored on the user's phone.",
@@ -96,6 +101,8 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error("PRODUCTION ERROR:", error.stack || error.message);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ 
+      error: error.message
+    }, { status: 500 });
   }
 }
