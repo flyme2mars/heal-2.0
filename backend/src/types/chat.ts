@@ -1,21 +1,20 @@
-export interface HealthConnectData {
-  [key: string]: string;
-}
-
-export interface MemorySnapshot {
-  [filename: string]: string;
-}
-
 export interface ChatRequest {
   prompt: string;
-  context: {
-    health_connect?: HealthConnectData;
-    fhir_records?: string[];
-    memory_snapshot: MemorySnapshot;
-  };
+  context: ChatContext;
+  attachments?: ChatAttachment[];
 }
 
-export interface ChatResponse {
-  text: string;
-  updated_memory?: MemorySnapshot;
+export interface ChatAttachment {
+  type: "image";
+  url: string; // Base64 data URI for now
+}
+
+export interface ChatContext {
+  health_connect: HealthConnectData;
+  fhir_records: string[];
+  memory_snapshot: Record<string, string>;
+}
+
+export interface HealthConnectData {
+  summary: string;
 }
