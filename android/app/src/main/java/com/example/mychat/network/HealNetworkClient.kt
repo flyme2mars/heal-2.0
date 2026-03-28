@@ -17,14 +17,14 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import java.util.concurrent.TimeUnit
 
-sealed class ReminiEvent {
-    data class TextDelta(val text: String) : ReminiEvent()
-    data class ToolCall(val id: String, val name: String, val arguments: String) : ReminiEvent()
-    data class Error(val message: String) : ReminiEvent()
-    object StreamEnd : ReminiEvent()
+sealed class HealEvent {
+    data class TextDelta(val text: String) : HealEvent()
+    data class ToolCall(val id: String, val name: String, val arguments: String) : HealEvent()
+    data class Error(val message: String) : HealEvent()
+    object StreamEnd : HealEvent()
 }
 
-class ReminiNetworkClient {
+class HealNetworkClient {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS) 
@@ -33,7 +33,7 @@ class ReminiNetworkClient {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun streamChat(url: String, requestBody: String, appCheckToken: String?): Flow<ReminiEvent> = callbackFlow {
+    fun streamChat(url: String, requestBody: String, appCheckToken: String?): Flow<HealEvent> = callbackFlow {
         val request = Request.Builder()
             .url(url)
             .post(requestBody.toRequestBody("application/json".toMediaType()))
@@ -47,11 +47,11 @@ class ReminiNetworkClient {
 
         val listener = object : EventSourceListener() {
             override fun onOpen(eventSource: EventSource, response: Response) {
-                Log.d("ReminiNetwork", "SSE Connection Opened")
+                Log.d("HealNetwork", "SSE Connection Opened")
             }
 
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                Log.d("ReminiNetwork", "Event: $data")
+                Log.d("HealNetwork", "Event: $data")
                 try {
                     // Handle Vercel AI SDK format (e.g., 0:"hello")
                     if (data.length > 2 && data[1] == ':') {
@@ -66,29 +66,39 @@ class ReminiNetworkClient {
                             } else {
                                 payload
                             }
-                            trySend(ReminiEvent.TextDelta(cleanText))
+                            trySend(HealEvent.TextDelta(cleanText))
+                            return
+                        }
+
+                        if (type == '9') {
+                            // Tool Call Parsing
+                            val toolJson = json.parseToJsonElement(payload) as JsonObject
+                            val toolName = toolJson["toolName"]?.jsonPrimitive?.content ?: ""
+                            val args = toolJson["args"]?.toString() ?: ""
+                            val callId = toolJson["toolCallId"]?.jsonPrimitive?.content ?: ""
+                            trySend(HealEvent.ToolCall(callId, toolName, args))
                             return
                         }
                     }
                     
                     // Fallback: If it's just raw data
                     if (data.isNotEmpty()) {
-                        trySend(ReminiEvent.TextDelta(data))
+                        trySend(HealEvent.TextDelta(data))
                     }
                 } catch (e: Exception) {
-                    Log.e("ReminiNetwork", "Parser Error", e)
+                    Log.e("HealNetwork", "Parser Error", e)
                 }
             }
 
             override fun onClosed(eventSource: EventSource) {
-                Log.d("ReminiNetwork", "SSE Connection Closed")
-                trySend(ReminiEvent.StreamEnd)
+                Log.d("HealNetwork", "SSE Connection Closed")
+                trySend(HealEvent.StreamEnd)
                 close()
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                Log.e("ReminiNetwork", "SSE Connection Failed", t)
-                trySend(ReminiEvent.Error(t?.message ?: "Unknown Error"))
+                Log.e("HealNetwork", "SSE Connection Failed", t)
+                trySend(HealEvent.Error(t?.message ?: "Unknown Error"))
                 close(t)
             }
         }

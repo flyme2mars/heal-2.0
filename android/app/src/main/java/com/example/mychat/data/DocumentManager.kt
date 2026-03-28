@@ -15,7 +15,8 @@ data class HealthDocument(
     val name: String,
     val type: String, // "pdf" or "image"
     val internalPath: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val summary: String? = null
 )
 
 @Singleton
@@ -51,7 +52,8 @@ class DocumentManager @Inject constructor(
                 id = id,
                 name = originalName,
                 type = if (extension.lowercase() == "pdf") "pdf" else "image",
-                internalPath = internalName
+                internalPath = internalName,
+                summary = "Processing summary..."
             )
             
             healthDocumentDao.insertDocument(
@@ -60,7 +62,8 @@ class DocumentManager @Inject constructor(
                     name = doc.name,
                     type = doc.type,
                     internalPath = doc.internalPath,
-                    timestamp = doc.timestamp
+                    timestamp = doc.timestamp,
+                    summary = doc.summary
                 )
             )
             
@@ -101,6 +104,10 @@ class DocumentManager @Inject constructor(
         }
     }
 
+    suspend fun updateDocumentSummary(id: String, summary: String) {
+        healthDocumentDao.updateSummary(id, summary)
+    }
+
     fun getMemorySnapshot(): Map<String, String> {
         val memoryDir = File(context.filesDir, "memory")
         if (!memoryDir.exists()) memoryDir.mkdirs()
@@ -108,5 +115,13 @@ class DocumentManager @Inject constructor(
         return memoryDir.listFiles { _, name -> name.endsWith(".md") }?.associate { file ->
             file.name to file.readText()
         } ?: emptyMap()
+    }
+
+    fun saveMemoryFile(filename: String, content: String) {
+        val memoryDir = File(context.filesDir, "memory")
+        if (!memoryDir.exists()) memoryDir.mkdirs()
+        
+        val file = File(memoryDir, filename)
+        file.writeText(content)
     }
 }

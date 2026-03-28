@@ -3,14 +3,14 @@ package com.example.mychat.data
 import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
-import androidx.health.connect.client.records.HeartRateRecord
-import androidx.health.connect.client.records.SleepSessionRecord
-import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.records.*
 import androidx.health.connect.client.request.AggregateRequest
+import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Instant
 import java.time.ZonedDateTime
+import java.time.Duration
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -38,7 +38,10 @@ class HealthManager @Inject constructor(
     val permissions = setOf(
         HealthPermission.getReadPermission(StepsRecord::class),
         HealthPermission.getReadPermission(HeartRateRecord::class),
-        HealthPermission.getReadPermission(SleepSessionRecord::class)
+        HealthPermission.getReadPermission(SleepSessionRecord::class),
+        HealthPermission.getReadPermission(OxygenSaturationRecord::class),
+        HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
+        HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class)
     )
 
     suspend fun hasAllPermissions(): Boolean {
@@ -60,15 +63,25 @@ class HealthManager @Inject constructor(
             val stepsToday = fetchSteps(client, todayStart, endTime)
             val stepsLastWeek = fetchSteps(client, sevenDaysAgo, endTime)
             val heartRateToday = fetchHeartRate(client, todayStart, endTime)
+            val totalCaloriesToday = fetchTotalCalories(client, todayStart, endTime)
+            val activeCaloriesToday = fetchActiveCalories(client, todayStart, endTime)
+            val latestSpo2 = fetchLatestOxygenSaturation(client, sevenDaysAgo, endTime)
             
             val summary = StringBuilder()
             summary.append("User Health Data Summary:\n")
             summary.append("- Steps Today: ").append(stepsToday ?: 0).append("\n")
             summary.append("- Steps (Past 7 Days): ").append(stepsLastWeek ?: "No data").append("\n")
+            summary.append("- Total Calories Today (BMR + Active): ").append(totalCaloriesToday ?: "No data").append(" kcal\n")
+            summary.append("- Active Calories Burned Today: ").append(activeCaloriesToday ?: "No data").append(" kcal\n")
+            
+            if (latestSpo2 != null) {
+                summary.append("- Latest Blood Oxygen (SpO2): ").append(String.format("%.1f", latestSpo2)).append("%\n")
+            }
+            
             if (heartRateToday != null) {
                 summary.append("- Avg Heart Rate Today: ").append(heartRateToday).append(" bpm\n")
             } else {
-                summary.append("- Heart Rate: No data available (likely no wearable connected)\n")
+                summary.append("- Heart Rate: No data available\n")
             }
             summary.toString()
         } catch (e: Exception) {
@@ -94,5 +107,37 @@ class HealthManager @Inject constructor(
             )
         )
         return response[HeartRateRecord.BPM_AVG]
+    }
+
+    private suspend fun fetchTotalCalories(client: HealthConnectClient, startTime: Instant, endTime: Instant): Long? {
+        val response = client.aggregate(
+            AggregateRequest(
+                metrics = setOf(TotalCaloriesBurnedRecord.ENERGY_TOTAL),
+                timeRangeFilter = TimeRangeFilter.between(startTime, endTime)
+            )
+        )
+        return response[TotalCaloriesBurnedRecord.ENERGY_TOTAL]?.inKilocalories?.toLong()
+    }
+
+    private suspend fun fetchActiveCalories(client: HealthConnectClient, startTime: Instant, endTime: Instant): Long? {
+        val response = client.aggregate(
+            AggregateRequest(
+                metrics = setOf(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL),
+                timeRangeFilter = TimeRangeFilter.between(startTime, endTime)
+            )
+        )
+        return response[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories?.toLong()
+    }
+
+    private suspend fun fetchLatestOxygenSaturation(client: HealthConnectClient, startTime: Instant, endTime: Instant): Double? {
+        val response = client.readRecords(
+            ReadRecordsRequest(
+                recordType = OxygenSaturationRecord::class,
+                timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
+                ascendingOrder = false,
+                pageSize = 1
+            )
+        )
+        return response.records.firstOrNull()?.percentage?.value
     }
 }

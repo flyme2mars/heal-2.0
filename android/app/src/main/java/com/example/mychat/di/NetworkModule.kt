@@ -1,6 +1,6 @@
 package com.example.mychat.di
 
-import com.example.mychat.network.ReminiNetworkClient
+import com.example.mychat.network.HealNetworkClient
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -13,7 +13,7 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideReminiNetworkClient(): ReminiNetworkClient {
-        return ReminiNetworkClient()
+    fun provideHealNetworkClient(): HealNetworkClient {
+        return HealNetworkClient()
     }
 }

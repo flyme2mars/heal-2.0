@@ -25,14 +25,20 @@ interface HealthDocumentDao {
     @Query("SELECT * FROM health_documents ORDER BY timestamp DESC")
     fun getAllDocuments(): Flow<List<HealthDocumentEntity>>
 
+    @Query("SELECT * FROM health_documents WHERE id = :id")
+    suspend fun getDocumentById(id: String): HealthDocumentEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDocument(document: HealthDocumentEntity)
+
+    @Query("UPDATE health_documents SET summary = :summary WHERE id = :id")
+    suspend fun updateSummary(id: String, summary: String)
 
     @Query("DELETE FROM health_documents WHERE id = :id")
     suspend fun deleteDocument(id: String)
 }
 
-@Database(entities = [HealthDocumentEntity::class], version = 1)
+@Database(entities = [HealthDocumentEntity::class], version = 2)
 abstract class HealthDatabase : RoomDatabase() {
     abstract fun healthDocumentDao(): HealthDocumentDao
 }

@@ -8,8 +8,8 @@ import com.example.mychat.data.HealthManager
 import com.example.mychat.data.MedicalRecordManager
 import com.example.mychat.data.DocumentManager
 import com.example.mychat.data.HealthDocument
-import com.example.mychat.network.ReminiNetworkClient
-import com.example.mychat.network.ReminiEvent
+import com.example.mychat.network.HealNetworkClient
+import com.example.mychat.network.HealEvent
 import com.example.mychat.network.ChatRequest
 import com.example.mychat.network.ChatContext
 import android.net.Uri
@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.encodeToString
 import javax.inject.Inject
 
@@ -32,7 +34,7 @@ class ChatViewModel @Inject constructor(
     private val healthManager: HealthManager,
     private val medicalRecordManager: MedicalRecordManager,
     private val documentManager: DocumentManager,
-    private val networkClient: ReminiNetworkClient
+    private val networkClient: HealNetworkClient
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -42,9 +44,26 @@ class ChatViewModel @Inject constructor(
         documentManager.getAllDocuments()
     ) { state, docs ->
         state.copy(documents = docs.map { 
-            HealthDocument(it.id, it.name, it.type, it.internalPath, it.timestamp) 
+            HealthDocument(it.id, it.name, it.type, it.internalPath, it.timestamp, it.summary) 
         })
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ChatUiState())
+
+    init {
+        refreshUserData()
+    }
+
+    private fun refreshUserData() {
+        viewModelScope.launch {
+            val name = medicalRecordManager.getPatientName() ?: ""
+            val weight = medicalRecordManager.getLatestWeight() ?: ""
+            val summary = medicalRecordManager.getMedicalSummary()
+            _uiState.update { it.copy(
+                userName = name,
+                userWeight = weight,
+                medicalSummary = summary
+            ) }
+        }
+    }
 
     val healthPermissions = healthManager.permissions
 
@@ -52,32 +71,32 @@ class ChatViewModel @Inject constructor(
     
     fun getHealthSettingsIntent() = healthManager.getHealthConnectSettingsIntent()
 
-    fun loadSampleMedicalData() {
+    fun updateProfile(firstName: String, lastName: String, gender: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isSyncing = true) }
             try {
-                medicalRecordManager.saveSamplePatient()
-                medicalRecordManager.saveSampleVitals()
-                refreshMedicalSummary()
-                _uiState.update { it.copy(
-                    messages = it.messages + ChatMessage(
-                        text = "Sample ABDM medical records loaded into local secure vault.",
-                        role = ChatRole.MODEL
-                    ),
-                    isSyncing = false
-                ) }
-            } catch (e: Exception) {
-                android.util.Log.e("ChatViewModel", "Failed to load samples", e)
+                medicalRecordManager.updatePatient(firstName, lastName, gender)
+                refreshUserData()
+            } finally {
+                _uiState.update { it.copy(isSyncing = false) }
+            }
+        }
+    }
+
+    fun updateWeight(weight: Double) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncing = true) }
+            try {
+                medicalRecordManager.updateWeight(weight)
+                refreshUserData()
+            } finally {
                 _uiState.update { it.copy(isSyncing = false) }
             }
         }
     }
 
     fun refreshMedicalSummary() {
-        viewModelScope.launch {
-            val summary = medicalRecordManager.getMedicalSummary()
-            _uiState.update { it.copy(medicalSummary = summary) }
-        }
+        refreshUserData()
     }
 
     fun uploadDocument(uri: Uri, name: String) {
@@ -85,15 +104,30 @@ class ChatViewModel @Inject constructor(
             _uiState.update { it.copy(isSyncing = true) }
             val doc = documentManager.saveDocument(uri, name)
             if (doc != null) {
+                // Trigger background summarization
+                summarizeDocument(doc)
+                
                 _uiState.update { it.copy(
                     messages = it.messages + ChatMessage(
-                        text = "Document '${name}' uploaded securely to vault.",
+                        text = "Document '${name}' uploaded securely. AI is generating a summary...",
                         role = ChatRole.MODEL
                     ),
                     isSyncing = false
                 ) }
             } else {
                 _uiState.update { it.copy(isSyncing = false) }
+            }
+        }
+    }
+
+    private fun summarizeDocument(doc: HealthDocument) {
+        viewModelScope.launch {
+            try {
+                val placeholderSummary = "Medical record regarding ${doc.name}. Content encrypted in vault."
+                documentManager.updateDocumentSummary(doc.id, placeholderSummary)
+                refreshUserData()
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Summarization failed", e)
             }
         }
     }
@@ -126,13 +160,16 @@ class ChatViewModel @Inject constructor(
 
                 val medicalSummary = medicalRecordManager.getMedicalSummary()
                 val memorySnapshot = documentManager.getMemorySnapshot()
+                val docSummaries = uiState.value.documents.joinToString("\n") { 
+                    "- ${it.name} (${it.type.uppercase()}): ${it.summary ?: "No summary"}"
+                }
 
                 // 2. Build the request
                 val request = ChatRequest(
                     prompt = userText,
                     context = ChatContext(
                         health_connect = mapOf("summary" to healthSummary),
-                        fhir_records = listOf(medicalSummary),
+                        fhir_records = listOf(medicalSummary, "Vault Documents:\n$docSummaries"),
                         memory_snapshot = memorySnapshot
                     )
                 )
@@ -144,7 +181,7 @@ class ChatViewModel @Inject constructor(
                 // 3. Stream from Backend
                 networkClient.streamChat(backendUrl, requestBody, null).collect { event ->
                     when (event) {
-                        is ReminiEvent.TextDelta -> {
+                        is HealEvent.TextDelta -> {
                             fullResponseText += event.text
                             val now = System.currentTimeMillis()
                             if (now - lastUpdateTime > 50) {
@@ -152,20 +189,35 @@ class ChatViewModel @Inject constructor(
                                 lastUpdateTime = now
                             }
                         }
-                        is ReminiEvent.ToolCall -> {
-                            Log.d("ChatViewModel", "Backend requested tool: ${event.name}")
+                        is HealEvent.ToolCall -> {
+                            Log.d("ChatViewModel", "AI requesting tool: ${event.name} with args: ${event.arguments}")
+                            if (event.name == "update_memory") {
+                                try {
+                                    val json = Json { ignoreUnknownKeys = true }
+                                    val argsJson = json.parseToJsonElement(event.arguments) as JsonObject
+                                    val filename = argsJson["filename"]?.jsonPrimitive?.content ?: ""
+                                    val content = argsJson["content"]?.jsonPrimitive?.content ?: ""
+                                    
+                                    if (filename.isNotEmpty()) {
+                                        documentManager.saveMemoryFile(filename, content)
+                                        Log.i("ChatViewModel", "Memory updated: $filename")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("ChatViewModel", "Failed to update memory", e)
+                                }
+                            }
                         }
-                        is ReminiEvent.Error -> {
+                        is HealEvent.Error -> {
                             updateMessage(modelMessage.id, "Backend Error: ${event.message}", false, ChatRole.ERROR)
                         }
-                        is ReminiEvent.StreamEnd -> {
+                        is HealEvent.StreamEnd -> {
                             updateMessage(modelMessage.id, fullResponseText, false)
                         }
                     }
                 }
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Error connecting to backend", e)
-                updateMessage(modelMessage.id, "Could not connect to Remini Backend. Ensure it is running on your computer.", false, ChatRole.ERROR)
+                updateMessage(modelMessage.id, "Could not connect to Heal 2.0 Backend. Ensure it is running on your computer.", false, ChatRole.ERROR)
             }
         }
     }
@@ -194,5 +246,7 @@ data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val isSyncing: Boolean = false,
     val medicalSummary: String = "No medical records found.",
-    val documents: List<HealthDocument> = emptyList()
+    val documents: List<HealthDocument> = emptyList(),
+    val userName: String = "",
+    val userWeight: String = ""
 )

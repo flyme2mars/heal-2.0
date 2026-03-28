@@ -16,13 +16,6 @@ import androidx.compose.ui.platform.LocalContext
 import android.widget.Toast
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.ui.draw.rotate
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.HealthAndSafety
@@ -69,7 +62,7 @@ fun ChatScreen(
             ModalDrawerSheet {
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Remini Menu",
+                    "Heal 2.0 Menu",
                     modifier = Modifier.padding(16.dp),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
@@ -101,7 +94,7 @@ fun ChatScreen(
                 CenterAlignedTopAppBar(
                     title = {
                         Text(
-                            "Remini",
+                            "Heal 2.0",
                             fontWeight = FontWeight.ExtraBold,
                             style = MaterialTheme.typography.titleLarge,
                             letterSpacing = 1.sp
@@ -122,7 +115,7 @@ fun ChatScreen(
                                     try {
                                         val intent = android.content.Intent("androidx.health.ACTION_HEALTH_CONNECT_SETTINGS")
                                         context.startActivity(intent)
-                                        Toast.makeText(context, "Please enable Remini in Settings", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "Please enable Heal 2.0 in Settings", Toast.LENGTH_LONG).show()
                                     } catch (e2: Exception) {
                                         Toast.makeText(context, "Could not open Health Connect settings", Toast.LENGTH_LONG).show()
                                     }
@@ -139,27 +132,6 @@ fun ChatScreen(
                                 imageVector = Icons.Default.Favorite,
                                 contentDescription = "Health Connect",
                                 tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        IconButton(
-                            onClick = { viewModel.loadSampleMedicalData() },
-                            enabled = !uiState.isSyncing
-                        ) {
-                            val infiniteTransition = rememberInfiniteTransition(label = "SyncRotation")
-                            val rotation by infiniteTransition.animateFloat(
-                                initialValue = 0f,
-                                targetValue = 360f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(1000, easing = LinearEasing)
-                                ),
-                                label = "SyncRotation"
-                            )
-                            
-                            Icon(
-                                imageVector = Icons.Default.Sync,
-                                contentDescription = "Sync ABDM",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = if (uiState.isSyncing) Modifier.rotate(rotation) else Modifier
                             )
                         }
                         FilledTonalIconButton(
@@ -287,7 +259,7 @@ fun MessageBubble(message: ChatMessage) {
             }
         }
         Text(
-            text = if (isUser) "You" else "Remini",
+            text = if (isUser) "You" else "Heal 2.0",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp)
@@ -314,7 +286,7 @@ fun ChatInput(onSendMessage: (String) -> Unit) {
             TextField(
                 value = text,
                 onValueChange = { text = it },
-                placeholder = { Text("Message Remini...") },
+                placeholder = { Text("Message Heal 2.0...") },
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(24.dp)),

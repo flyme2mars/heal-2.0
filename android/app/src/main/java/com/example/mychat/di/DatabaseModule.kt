@@ -22,7 +22,8 @@ object DatabaseModule {
             context,
             HealthDatabase::class.java,
             "health_vault.db"
-        ).build()
+        ).fallbackToDestructiveMigration()
+            .build()
     }
 
     @Provides
