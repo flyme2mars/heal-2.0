@@ -138,7 +138,7 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private val backendUrl = "http://localhost:3000/api/chat"
+    private val backendUrl = "https://heal-eight.vercel.app/api/chat"
 
     fun sendMessage(userText: String) {
         if (userText.isBlank()) return
