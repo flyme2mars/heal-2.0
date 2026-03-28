@@ -1,6 +1,6 @@
 async function testChat() {
   const payload = {
-    prompt: "Hello Remini, what do you know about me?",
+    prompt: "Hello Heal 2.0, what do you know about me?",
     context: {
       health_connect: {
         summary: "User has taken 5000 steps today."
