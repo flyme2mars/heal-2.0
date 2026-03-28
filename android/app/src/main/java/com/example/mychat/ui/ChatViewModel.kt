@@ -205,6 +205,20 @@ class ChatViewModel @Inject constructor(
                                 } catch (e: Exception) {
                                     Log.e("ChatViewModel", "Failed to update memory", e)
                                 }
+                            } else if (event.name == "read_medical_record") {
+                                try {
+                                    val json = Json { ignoreUnknownKeys = true }
+                                    val argsJson = json.parseToJsonElement(event.arguments) as JsonObject
+                                    val filename = argsJson["filename"]?.jsonPrimitive?.content ?: ""
+                                    
+                                    if (filename.isNotEmpty()) {
+                                        val content = documentManager.readDocumentText(filename)
+                                        // Automatically reply to AI with the context
+                                        sendMessage("System Context: Content of '$filename' is:\n---\n$content\n---\nPlease analyze this for me.")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("ChatViewModel", "Failed to read record", e)
+                                }
                             }
                         }
                         is HealEvent.Error -> {

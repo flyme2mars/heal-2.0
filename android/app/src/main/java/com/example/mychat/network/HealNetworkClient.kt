@@ -26,18 +26,22 @@ sealed class HealEvent {
 
 class HealNetworkClient {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS) 
-        .writeTimeout(10, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }
 
     fun streamChat(url: String, requestBody: String, appCheckToken: String?): Flow<HealEvent> = callbackFlow {
+        Log.d("HealNetwork", "Starting stream to: $url")
+        
         val request = Request.Builder()
             .url(url)
             .post(requestBody.toRequestBody("application/json".toMediaType()))
             .header("Accept", "text/event-stream")
+            .header("User-Agent", "Heal2.0-Android")
+            .header("Cache-Control", "no-cache")
             .apply {
                 if (appCheckToken != null) {
                     header("X-Firebase-AppCheck", appCheckToken)
@@ -47,18 +51,17 @@ class HealNetworkClient {
 
         val listener = object : EventSourceListener() {
             override fun onOpen(eventSource: EventSource, response: Response) {
-                Log.d("HealNetwork", "SSE Connection Opened")
+                Log.d("HealNetwork", "SSE Connection Opened. Code: ${response.code}")
             }
 
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 Log.d("HealNetwork", "Event: $data")
                 try {
-                    // Handle Vercel AI SDK format (e.g., 0:"hello")
                     if (data.length > 2 && data[1] == ':') {
-                        val type = data[0]
+                        val typeChar = data[0]
                         val payload = data.substring(2)
                         
-                        if (type == '0') {
+                        if (typeChar == '0') {
                             val cleanText = if (payload.startsWith("\"") && payload.endsWith("\"")) {
                                 payload.substring(1, payload.length - 1)
                                     .replace("\\n", "\n")
@@ -70,8 +73,7 @@ class HealNetworkClient {
                             return
                         }
 
-                        if (type == '9') {
-                            // Tool Call Parsing
+                        if (typeChar == '9') {
                             val toolJson = json.parseToJsonElement(payload) as JsonObject
                             val toolName = toolJson["toolName"]?.jsonPrimitive?.content ?: ""
                             val args = toolJson["args"]?.toString() ?: ""
@@ -81,7 +83,6 @@ class HealNetworkClient {
                         }
                     }
                     
-                    // Fallback: If it's just raw data
                     if (data.isNotEmpty()) {
                         trySend(HealEvent.TextDelta(data))
                     }
@@ -97,8 +98,8 @@ class HealNetworkClient {
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                Log.e("HealNetwork", "SSE Connection Failed", t)
-                trySend(HealEvent.Error(t?.message ?: "Unknown Error"))
+                Log.e("HealNetwork", "SSE Connection Failed. Code: ${response?.code}, Message: ${t?.message}", t)
+                trySend(HealEvent.Error("Connection Failed: ${t?.message ?: "HTTP ${response?.code}"}"))
                 close(t)
             }
         }

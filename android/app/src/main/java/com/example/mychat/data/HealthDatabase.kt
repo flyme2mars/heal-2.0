@@ -25,6 +25,9 @@ interface HealthDocumentDao {
     @Query("SELECT * FROM health_documents ORDER BY timestamp DESC")
     fun getAllDocuments(): Flow<List<HealthDocumentEntity>>
 
+    @Query("SELECT * FROM health_documents ORDER BY timestamp DESC")
+    suspend fun getAllDocumentsList(): List<HealthDocumentEntity>
+
     @Query("SELECT * FROM health_documents WHERE id = :id")
     suspend fun getDocumentById(id: String): HealthDocumentEntity?
 

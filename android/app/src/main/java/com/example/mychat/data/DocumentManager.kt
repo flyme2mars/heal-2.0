@@ -108,6 +108,30 @@ class DocumentManager @Inject constructor(
         healthDocumentDao.updateSummary(id, summary)
     }
 
+    suspend fun readDocumentText(filename: String): String {
+        return try {
+            val docs = healthDocumentDao.getAllDocumentsList()
+            val doc = docs.find { it.name == filename } ?: return "File not found in vault."
+            
+            val inputStream = getDocumentDecryptStream(
+                HealthDocument(doc.id, doc.name, doc.type, doc.internalPath, doc.timestamp, doc.summary)
+            )
+            
+            val content = inputStream.bufferedReader().use { it.readText() }
+            
+            if (doc.type == "pdf") {
+                // PDF extraction would normally happen here. 
+                // For now, we return the raw text or a note about the format.
+                "This is a PDF document titled '${doc.name}'. Content extraction in progress..."
+            } else {
+                content
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DocumentManager", "Error reading file: $filename", e)
+            "Error reading encrypted file: ${e.message}"
+        }
+    }
+
     fun getMemorySnapshot(): Map<String, String> {
         val memoryDir = File(context.filesDir, "memory")
         if (!memoryDir.exists()) memoryDir.mkdirs()
