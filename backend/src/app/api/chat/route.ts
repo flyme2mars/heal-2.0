@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "@ai-sdk/google";
-import { streamText, tool } from "ai";
+import { streamText } from "ai";
 import { z } from "zod";
 import { verifyAppCheck } from "@/lib/firebase";
 import { ChatRequest } from "@/types/chat";
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
       
       INSTRUCTIONS:
       1. Use 'update_memory' if the user tells you something important.
-      2. Keep responses professional.
+      2. Keep responses professional and magical.
     `;
 
     console.log("Starting Agentic stream with model: gemini-2.5-flash");
@@ -36,14 +36,13 @@ export async function POST(req: NextRequest) {
       system: systemInstruction,
       prompt: prompt,
       tools: {
-        update_memory: tool({
+        update_memory: {
           description: "Update a memory file stored on the user's phone.",
           parameters: z.object({
             filename: z.string().describe("e.g., 'soul.md'"),
             content: z.string().describe("new markdown content")
           }),
-          execute: async () => ({ status: "pending_client_execution" })
-        })
+        } as any
       }
     });
 
@@ -51,27 +50,19 @@ export async function POST(req: NextRequest) {
       async start(controller) {
         const encoder = new TextEncoder();
         try {
-          // Use textStream for reliable token delivery
-          for await (const chunk of result.textStream) {
-            console.log("Chunk:", chunk);
-            const sseChunk = `data: 0:${JSON.stringify(chunk)}\n\n`;
-            controller.enqueue(encoder.encode(sseChunk));
-          }
-          
-          // Check if there were tool calls
-          const toolCalls = await result.toolCalls;
-          for (const toolCall of toolCalls) {
-            if (toolCall.toolName === 'update_memory') {
-              console.log("AI called update_memory");
-              const toolSse = `data: 9:${JSON.stringify({
-                toolCallId: toolCall.toolCallId,
-                toolName: toolCall.toolName,
-                args: toolCall.args
-              })}\n\n`;
-              controller.enqueue(encoder.encode(toolSse));
+          for await (const part of result.fullStream) {
+            if (part.type === 'text-delta') {
+              controller.enqueue(encoder.encode(`data: 0:${JSON.stringify(part.text)}\n\n`));
+            } else if (part.type === 'tool-call') {
+              console.log("AI requested tool:", part.toolName);
+              // Note: Property is 'input', not 'args' in this version
+              controller.enqueue(encoder.encode(`data: 9:${JSON.stringify({
+                toolCallId: part.toolCallId,
+                toolName: part.toolName,
+                args: part.input
+              })}\n\n`));
             }
           }
-          
           controller.close();
         } catch (e) {
           console.error("Stream error:", e);
