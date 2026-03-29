@@ -10,5 +10,6 @@ data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val text: String,
     val role: ChatRole,
-    val isPending: Boolean = false
+    val isPending: Boolean = false,
+    val imageUri: String? = null // Store the local URI for display
 )

@@ -104,7 +104,11 @@ class ChatViewModel @Inject constructor(
         if (userText.isBlank() && _uiState.value.selectedImageUri == null) return
 
         val imageUri = _uiState.value.selectedImageUri
-        val userMessage = ChatMessage(text = userText, role = ChatRole.USER)
+        val userMessage = ChatMessage(
+            text = userText, 
+            role = ChatRole.USER,
+            imageUri = imageUri?.toString() // Save the URI string
+        )
         _uiState.update { it.copy(
             messages = it.messages + userMessage,
             selectedImageUri = null
@@ -179,7 +183,12 @@ class ChatViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Request failed", e)
-                updateMessage(modelMessage.id, "Failed to connect to Heal 2.0 Backend.", false, ChatRole.ERROR)
+                val friendlyMessage = when {
+                    e is java.net.UnknownHostException -> "No internet connection. Please check your Wi-Fi or mobile data."
+                    e is java.net.ConnectException -> "Could not reach Heal 2.0 server. Please try again later."
+                    else -> "Failed to connect to Heal 2.0 Backend."
+                }
+                updateMessage(modelMessage.id, friendlyMessage, false, ChatRole.ERROR)
             }
         }
     }

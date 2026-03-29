@@ -3,6 +3,7 @@ package com.example.mychat.ui
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -22,6 +23,8 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,12 +44,36 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var isClearing by remember { mutableStateOf(false) }
+    var showFullScreenImage by remember { mutableStateOf<String?>(null) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
         viewModel.selectImage(uri)
+    }
+
+    // Full Screen Image Dialog
+    if (showFullScreenImage != null) {
+        Dialog(
+            onDismissRequest = { showFullScreenImage = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.9f))) {
+                AsyncImage(
+                    model = showFullScreenImage,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize().padding(16.dp),
+                    contentScale = ContentScale.Fit
+                )
+                IconButton(
+                    onClick = { showFullScreenImage = null },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).background(Color.White.copy(alpha = 0.2f), CircleShape)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                }
+            }
+        }
     }
 
     ModalNavigationDrawer(
@@ -80,7 +107,7 @@ fun ChatScreen(
                         IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, contentDescription = "Menu") }
                     },
                     actions = {
-                        IconButton(onClick = { /* Health Permission Flow kept same */ }) {
+                        IconButton(onClick = { /* Health Permission Flow */ }) {
                             Icon(Icons.Default.Favorite, contentDescription = "Health Connect", tint = MaterialTheme.colorScheme.primary)
                         }
                         FilledTonalIconButton(onClick = { scope.launch { isClearing = true; delay(300); viewModel.clearChat(); isClearing = false } }) {
@@ -93,7 +120,8 @@ fun ChatScreen(
                 ChatInput(
                     selectedImageUri = uiState.selectedImageUri,
                     onPickImage = { imagePicker.launch("image/*") },
-                    onRemoveImage = { viewModel.selectImage(null) }
+                    onRemoveImage = { viewModel.selectImage(null) },
+                    onPreviewClick = { showFullScreenImage = it.toString() }
                 ) { text ->
                     viewModel.sendMessage(text)
                     scope.launch { if (uiState.messages.isNotEmpty()) listState.animateScrollToItem(uiState.messages.size - 1) }
@@ -102,7 +130,7 @@ fun ChatScreen(
         ) { paddingValues ->
             AnimatedVisibility(visible = !isClearing, exit = fadeOut(), enter = fadeIn()) {
                 LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(paddingValues).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 16.dp)) {
-                    items(uiState.messages, key = { it.id }) { MessageBubble(it) }
+                    items(uiState.messages, key = { it.id }) { MessageBubble(it, onImageClick = { uri -> showFullScreenImage = uri }) }
                 }
             }
             LaunchedEffect(uiState.messages.size) { if (uiState.messages.isNotEmpty()) listState.animateScrollToItem(uiState.messages.size - 1) }
@@ -111,7 +139,7 @@ fun ChatScreen(
 }
 
 @Composable
-fun MessageBubble(message: ChatMessage) {
+fun MessageBubble(message: ChatMessage, onImageClick: (String) -> Unit) {
     val isUser = message.role == ChatRole.USER
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val containerColor = when (message.role) {
@@ -126,11 +154,43 @@ fun MessageBubble(message: ChatMessage) {
     }
 
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = alignment) {
-        Box(modifier = Modifier.clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = if (isUser) 20.dp else 4.dp, bottomEnd = if (isUser) 4.dp else 20.dp)).background(containerColor).padding(16.dp).widthIn(max = 300.dp)) {
-            if (message.isPending && message.text.isEmpty()) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = contentColor)
-            } else {
-                MarkdownContent(text = message.text, contentColor = contentColor)
+        Box(
+            modifier = Modifier
+                .clip(
+                    RoundedCornerShape(
+                        topStart = 20.dp, 
+                        topEnd = 20.dp, 
+                        bottomStart = if (isUser) 20.dp else 4.dp, 
+                        bottomEnd = if (isUser) 4.dp else 20.dp
+                    )
+                )
+                .background(containerColor)
+                .widthIn(max = 300.dp)
+        ) {
+            Column {
+                // Sent Image Display
+                if (message.imageUri != null) {
+                    AsyncImage(
+                        model = message.imageUri,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .padding(4.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { onImageClick(message.imageUri) },
+                        contentScale = ContentScale.Crop
+                    )
+                }
+                
+                // Message Text
+                Box(modifier = Modifier.padding(16.dp)) {
+                    if (message.isPending && message.text.isEmpty()) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = contentColor)
+                    } else {
+                        MarkdownContent(text = message.text, contentColor = contentColor)
+                    }
+                }
             }
         }
         Text(text = if (isUser) "You" else "Heal 2.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
@@ -142,30 +202,39 @@ fun ChatInput(
     selectedImageUri: android.net.Uri?,
     onPickImage: () -> Unit,
     onRemoveImage: () -> Unit,
+    onPreviewClick: (android.net.Uri) -> Unit,
     onSendMessage: (String) -> Unit
 ) {
     var text by remember { mutableStateOf("") }
     val keyboardController = LocalSoftwareKeyboardController.current
 
     Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).navigationBarsPadding().imePadding()) {
-        // Attachment Preview Bar
+        // Attachment Preview Bar (Square Chip Style)
         AnimatedVisibility(
             visible = selectedImageUri != null,
             enter = expandVertically() + fadeIn(),
             exit = shrinkVertically() + fadeOut()
         ) {
-            Box(modifier = Modifier.padding(16.dp).size(80.dp)) {
-                AsyncImage(
-                    model = selectedImageUri,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)),
-                    contentScale = ContentScale.Crop
-                )
+            Box(modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                        .clickable { selectedImageUri?.let { onPreviewClick(it) } }
+                ) {
+                    AsyncImage(
+                        model = selectedImageUri,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                }
                 Surface(
-                    modifier = Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp).size(24.dp).clickable { onRemoveImage() },
+                    modifier = Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp).size(22.dp).clickable { onRemoveImage() },
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.error,
-                    shadowElevation = 4.dp
+                    shadowElevation = 2.dp
                 ) {
                     Icon(Icons.Default.Close, contentDescription = "Remove", tint = Color.White, modifier = Modifier.padding(4.dp))
                 }
