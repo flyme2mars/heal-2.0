@@ -33,6 +33,9 @@ import com.example.mychat.data.ChatMessage
 import com.example.mychat.data.ChatRole
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -180,7 +183,6 @@ fun ChatScreen(
                         IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, contentDescription = "Menu") }
                     },
                     actions = {
-                        val healthManager = androidx.health.connect.client.HealthConnectClient.getSdkStatus(LocalContext.current)
                         IconButton(onClick = { 
                             if (uiState.healthPermissionGranted) {
                                 viewModel.syncHealthData()
@@ -223,15 +225,7 @@ fun ChatScreen(
         ) { paddingValues ->
             AnimatedVisibility(visible = !isClearing, exit = fadeOut(), enter = fadeIn()) {
                 LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(paddingValues).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 16.dp)) {
-                    items(uiState.messages, key = { it.id }) { MessageBubble(it, onImageClick = { uri -> showFullScreenImage = uri }) }
-                    
-                    items(uiState.pendingApprovals, key = { it.id }) { request ->
-                        PermissionRequestCard(
-                            request = request,
-                            onApprove = { viewModel.approveRecord(it) },
-                            onReject = { viewModel.rejectRecord(it) }
-                        )
-                    }
+                    items(uiState.messages, key = { it.id }) { MessageBubble(it, onImageClick = { uri -> showFullScreenImage = uri }, viewModel = viewModel) }
                 }
             }
             LaunchedEffect(uiState.messages.size) { if (uiState.messages.isNotEmpty()) listState.animateScrollToItem(uiState.messages.size - 1) }
@@ -240,7 +234,11 @@ fun ChatScreen(
 }
 
 @Composable
-fun MessageBubble(message: ChatMessage, onImageClick: (String) -> Unit) {
+fun MessageBubble(
+    message: ChatMessage, 
+    onImageClick: (String) -> Unit,
+    viewModel: ChatViewModel
+) {
     val isUser = message.role == ChatRole.USER
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val containerColor = when (message.role) {
@@ -295,7 +293,47 @@ fun MessageBubble(message: ChatMessage, onImageClick: (String) -> Unit) {
                     if (message.isPending && message.text.isEmpty() && message.reasoning.isNullOrEmpty()) {
                         WavyLoadingIndicator(color = contentColor)
                     } else {
-                        MarkdownContent(text = message.text, contentColor = contentColor)
+                        Column {
+                            MarkdownContent(text = message.text, contentColor = contentColor)
+                            
+                            // 2026 Inline Tool Approval UX
+                            message.pendingToolCall?.let { tool ->
+                                Spacer(modifier = Modifier.height(12.dp))
+                                IntentApprovalCard(
+                                    tool = tool,
+                                    onApprove = { 
+                                        try {
+                                            val json = Json { ignoreUnknownKeys = true }
+                                            val args = json.parseToJsonElement(tool.arguments) as JsonObject
+                                            val id = args["id"]?.jsonPrimitive?.content ?: ""
+                                            viewModel.approveRecord(id, message.id)
+                                        } catch (e: Exception) { }
+                                    },
+                                    onReject = { viewModel.rejectRecord(message.id) }
+                                )
+                            }
+                            
+                            if (message.isActionResolved && message.isPending) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(top = 12.dp).fillMaxWidth().background(contentColor.copy(alpha = 0.05f), RoundedCornerShape(8.dp)).padding(8.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.AutoAwesome, 
+                                        null, 
+                                        Modifier.size(16.dp), 
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        "Data ingested, synthesizing...", 
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = contentColor.copy(alpha = 0.7f),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -306,6 +344,79 @@ fun MessageBubble(message: ChatMessage, onImageClick: (String) -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant, 
             modifier = Modifier.padding(top = 4.dp, start = if (isUser) 0.dp else 8.dp, end = if (isUser) 8.dp else 0.dp)
         )
+    }
+}
+
+@Composable
+fun IntentApprovalCard(
+    tool: com.example.mychat.data.ToolCallInfo,
+    onApprove: () -> Unit,
+    onReject: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+        ),
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.FactCheck, 
+                    null, 
+                    Modifier.size(20.dp), 
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Clinical Data Access", 
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            
+            Spacer(modifier = Modifier.height(10.dp))
+            
+            val reason = try {
+                val json = Json { ignoreUnknownKeys = true }
+                val args = json.parseToJsonElement(tool.arguments) as JsonObject
+                args["reason"]?.jsonPrimitive?.content ?: "Access needed for detailed clinical analysis."
+            } catch (e: Exception) { "Access requested to record." }
+            
+            Text(
+                reason,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                lineHeight = 16.sp
+            )
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onReject,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text("Deny", style = MaterialTheme.typography.labelMedium)
+                }
+                Button(
+                    onClick = onApprove,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Text("Approve", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
     }
 }
 
@@ -398,7 +509,6 @@ fun ChatInput(
     val keyboardController = LocalSoftwareKeyboardController.current
 
     Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).navigationBarsPadding().imePadding()) {
-        // Attachment Preview Bar (Square Chip Style)
         AnimatedVisibility(
             visible = selectedImageUri != null,
             enter = expandVertically() + fadeIn(),
@@ -452,66 +562,3 @@ fun ChatInput(
         }
     }
 }
-
-@Composable
-fun PermissionRequestCard(
-    request: com.example.mychat.ui.PermissionRequest,
-    onApprove: (String) -> Unit,
-    onReject: (String) -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.Lock, 
-                    contentDescription = null, 
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    "Data Access Request", 
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                "Heal Agent needs to access your medical record: \n\"${request.documentName}\"",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                "Reason: ${request.reason}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
-                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-            )
-            Spacer(modifier = Modifier.height(20.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = { onReject(request.id) }) {
-                    Text("Deny", color = MaterialTheme.colorScheme.onPrimaryContainer)
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    onClick = { onApprove(request.id) },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        contentColor = MaterialTheme.colorScheme.primaryContainer
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("Grant Access")
-                }
-            }
-        }
-    }
-}
-

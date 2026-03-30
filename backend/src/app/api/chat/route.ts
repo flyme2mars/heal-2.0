@@ -15,22 +15,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing prompt or attachment" }, { status: 400 });
     }
 
+    const isSystemInjection = prompt?.startsWith("[SYSTEM_INJECTION:");
+
     const systemInstruction = `
       You are Heal 2.0, a professional and friendly health AI agent. 
       You act as a clinical collaborator, helping users manage their health records and data.
 
-      IMPORTANT FLOW:
-      1. You are provided with a "LOCAL VAULT INDEX" which contains IDs and summaries of the user's health records.
-      2. If you need the full text of a specific record to answer accurately, you MUST use the 'request_medical_record' tool.
-      3. Explain to the user WHY you need access to that specific record before or while calling the tool.
-      4. Once approved, the system will provide the full text in a follow-up message.
+      IMPORTANT FLOW (AGENTIC MEMORY):
+      1. If you need a full record to answer, use the 'request_medical_record' tool.
+      2. When the user approves, you will receive a message starting with '[SYSTEM_INJECTION]'.
+      3. TREAT SYSTEM INJECTIONS AS PRIVATE WORKING MEMORY. 
+      4. DO NOT repeat the full content of the injection back to the user.
+      5. Summarize the findings and explain how it relates to their question.
 
       TONE GUIDELINES:
-      1. Be professional, calm, and empathetic. 
-      2. Use clear, direct language. Avoid medical jargon unless you explain it simply.
-      3. ABSOLUTELY NO flowery or "magical" language.
-      4. Be concise and actionable.
-
+      - Be concise, actionable, and empathetic. 
+      - Use 'Thinking' to show your research process.
+      
       CONTEXT:
       - Health Vitals: ${context.health_connect ? JSON.stringify(context.health_connect) : 'No data available'}
       - Medical Summary: ${context.fhir_records?.join('\n') || 'No clinical records on file.'}
@@ -38,16 +39,25 @@ export async function POST(req: NextRequest) {
     `;
 
     // 2026 Context Engineering: Convert history to AI SDK messages
-    const pastMessages: any[] = (history || []).map(msg => ({
-      role: msg.role === 'assistant' ? 'assistant' : 'user',
-      content: msg.content
-    }));
+    const pastMessages: any[] = (history || []).map(msg => {
+      // Treat hidden system injections as 'system' or 'user' roles for context
+      const isInternal = msg.content.startsWith("[SYSTEM_INJECTION:");
+      return {
+        role: msg.role === 'assistant' ? 'assistant' : 'user',
+        content: msg.content
+      };
+    });
+
+    // If it's a system injection, we can optionally wrap it as a more authoritative system message
+    const currentPromptText = isSystemInjection 
+      ? `SYSTEM MEMORY UPDATE: ${prompt}`
+      : prompt || "Please analyze my health status.";
 
     // Add current prompt with attachments
     const currentMessage = {
       role: "user" as const,
       content: [
-        { type: "text", text: prompt || "Please analyze my health status." },
+        { type: "text", text: currentPromptText },
         ...(attachments || []).map(att => ({
           type: "image" as const,
           image: att.url,

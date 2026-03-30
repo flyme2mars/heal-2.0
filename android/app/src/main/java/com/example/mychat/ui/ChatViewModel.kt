@@ -156,44 +156,67 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun sendMessage(userText: String) {
+    fun sendMessage(userText: String, isHiddenData: Boolean = false) {
         if (userText.isBlank() && _uiState.value.selectedImageUri == null) return
 
         val sessionId = _uiState.value.activeSessionId ?: return
         val imageUri = _uiState.value.selectedImageUri
-        val userMessage = ChatMessage(
-            text = userText, 
-            role = ChatRole.USER,
-            imageUri = imageUri?.toString()
-        )
-        _uiState.update { it.copy(
-            messages = it.messages + userMessage,
-            selectedImageUri = null
-        ) }
+        
+        // UI: Only add to the list if not hidden
+        if (!isHiddenData) {
+            val userMessage = ChatMessage(
+                text = userText, 
+                role = ChatRole.USER,
+                imageUri = imageUri?.toString()
+            )
+            _uiState.update { it.copy(
+                messages = it.messages + userMessage,
+                selectedImageUri = null
+            ) }
+        }
 
         viewModelScope.launch {
-            // Persist User Message
+            // Persist User Message (even if hidden context, we store it for history)
             chatDao.insertMessage(ChatMessageEntity(
                 sessionId = sessionId,
-                role = "user",
+                role = if (isHiddenData) "system" else "user",
                 content = userText,
                 timestamp = System.currentTimeMillis()
             ))
 
             val modelMessage = ChatMessage(text = "", role = ChatRole.MODEL, isPending = true)
-            _uiState.update { it.copy(messages = it.messages + modelMessage) }
+            // UI: Don't add a new model message if this is a follow-up to a tool approval
+            if (!isHiddenData) {
+                _uiState.update { it.copy(messages = it.messages + modelMessage) }
+            } else {
+                // If it's a follow-up, mark the LAST model message as pending again
+                _uiState.update { state ->
+                    val newList = state.messages.toMutableList()
+                    val lastModel = newList.findLast { it.role == ChatRole.MODEL || it.role == ChatRole.ASSISTANT }
+                    if (lastModel != null) {
+                        val index = newList.indexOf(lastModel)
+                        newList[index] = lastModel.copy(isPending = true, isActionResolved = true)
+                    }
+                    state.copy(messages = newList)
+                }
+            }
 
             try {
+                // Determine target message ID for updates
+                val targetId = if (isHiddenData) {
+                   _uiState.value.messages.findLast { it.role == ChatRole.MODEL || it.role == ChatRole.ASSISTANT }?.id ?: modelMessage.id
+                } else modelMessage.id
+
                 val healthSummary = if (healthManager.hasAllPermissions()) healthManager.fetchHealthSummary() else "Permissions not granted."
                 val medicalSummary = medicalRecordManager.getMedicalSummary()
                 val memorySnapshot = documentManager.getMemorySnapshot()
                 
-                // Get History for Context (Last 10 messages)
-                val history = chatDao.getMessagesForSessionList(sessionId).takeLast(10).map { 
+                // Get History (Last 15 messages)
+                val history = chatDao.getMessagesForSessionList(sessionId).takeLast(15).map { 
                     mapOf("role" to it.role, "content" to it.content)
                 }
 
-                // Agent Context: Only sending Metadata "Map"
+                // Discovery Index
                 val docMap = uiState.value.documents.joinToString("\n") { 
                     "- ID: ${it.id} | Label: ${it.userLabel ?: it.name} | Type: ${it.recordType ?: "Unknown"} | Tags: ${it.tags.joinToString(", ")} | Date: ${it.recordDate ?: "No Date"} | AI Summary: ${it.summary}"
                 }
@@ -207,7 +230,7 @@ class ChatViewModel @Inject constructor(
 
                 val request = ChatRequest(
                     prompt = userText,
-                    history = history, // Pass history to backend
+                    history = history,
                     context = ChatContext(
                         health_connect = mapOf("summary" to healthSummary),
                         fhir_records = listOf(medicalSummary, "LOCAL VAULT INDEX:\n$docMap"),
@@ -219,8 +242,12 @@ class ChatViewModel @Inject constructor(
                 val backendUrl = "https://heal-eight.vercel.app/api/chat"
                 val json = Json { ignoreUnknownKeys = true }
                 val requestBody = json.encodeToString(request)
-                var fullResponseText = ""
-                var fullReasoningText = ""
+                var fullResponseText = if (isHiddenData) {
+                    _uiState.value.messages.find { it.id == targetId }?.text ?: ""
+                } else ""
+                var fullReasoningText = if (isHiddenData) {
+                    _uiState.value.messages.find { it.id == targetId }?.reasoning ?: ""
+                } else ""
                 var lastUpdateTime = System.currentTimeMillis()
 
                 networkClient.streamChat(backendUrl, requestBody, null).collect { event ->
@@ -228,24 +255,23 @@ class ChatViewModel @Inject constructor(
                         is HealEvent.TextDelta -> {
                             fullResponseText += event.text
                             if (System.currentTimeMillis() - lastUpdateTime > 50) {
-                                updateMessage(modelMessage.id, fullResponseText, true, reasoning = fullReasoningText)
+                                updateMessage(targetId, fullResponseText, true, reasoning = fullReasoningText)
                                 lastUpdateTime = System.currentTimeMillis()
                             }
                         }
                         is HealEvent.ReasoningDelta -> {
                             fullReasoningText += event.text
                             if (System.currentTimeMillis() - lastUpdateTime > 50) {
-                                updateMessage(modelMessage.id, fullResponseText, true, reasoning = fullReasoningText)
+                                updateMessage(targetId, fullResponseText, true, reasoning = fullReasoningText)
                                 lastUpdateTime = System.currentTimeMillis()
                             }
                         }
                         is HealEvent.ToolCall -> {
-                            handleToolCall(event, modelMessage.id)
+                            handleToolCall(event, targetId)
                         }
-                        is HealEvent.Error -> updateMessage(modelMessage.id, "Error: ${event.message}", false, ChatRole.ERROR)
+                        is HealEvent.Error -> updateMessage(targetId, "Error: ${event.message}", false, ChatRole.ERROR)
                         is HealEvent.StreamEnd -> {
-                            updateMessage(modelMessage.id, fullResponseText, false, reasoning = fullReasoningText)
-                            // Persist Assistant Message
+                            updateMessage(targetId, fullResponseText, false, reasoning = fullReasoningText)
                             chatDao.insertMessage(ChatMessageEntity(
                                 sessionId = sessionId,
                                 role = "assistant",
@@ -253,8 +279,7 @@ class ChatViewModel @Inject constructor(
                                 reasoning = fullReasoningText,
                                 timestamp = System.currentTimeMillis()
                             ))
-                            // Update session title if first message
-                            if (uiState.value.messages.size <= 3) {
+                            if (!isHiddenData && uiState.value.messages.size <= 3) {
                                 val newTitle = if (userText.length > 30) userText.take(27) + "..." else userText
                                 chatDao.updateSessionTitle(sessionId, newTitle, System.currentTimeMillis())
                             }
@@ -269,55 +294,44 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun handleToolCall(event: HealEvent.ToolCall, messageId: String) {
-        val json = Json { ignoreUnknownKeys = true }
-        when (event.name) {
-            "update_memory" -> {
-                try {
-                    val argsJson = json.parseToJsonElement(event.arguments) as JsonObject
-                    val filename = argsJson["filename"]?.jsonPrimitive?.content ?: ""
-                    val content = argsJson["content"]?.jsonPrimitive?.content ?: ""
-                    if (filename.isNotEmpty()) {
-                        documentManager.saveMemoryFile(filename, content)
-                    }
-                } catch (e: Exception) { Log.e("ChatViewModel", "Memory Update failed", e) }
+        val info = ToolCallInfo(
+            toolCallId = event.id,
+            name = event.name,
+            arguments = event.arguments
+        )
+        
+        _uiState.update { state ->
+            val newList = state.messages.toMutableList()
+            val index = newList.indexOfLast { it.id == messageId }
+            if (index != -1) {
+                newList[index] = newList[index].copy(
+                    isPending = false,
+                    pendingToolCall = info
+                )
             }
-            "request_medical_record" -> {
-                try {
-                    val argsJson = json.parseToJsonElement(event.arguments) as JsonObject
-                    val id = argsJson["id"]?.jsonPrimitive?.content ?: ""
-                    val reason = argsJson["reason"]?.jsonPrimitive?.content ?: "Needed for analysis"
-                    
-                    val document = uiState.value.documents.find { it.id == id }
-                    if (document != null) {
-                        _uiState.update { it.copy(
-                            pendingApprovals = it.pendingApprovals + PermissionRequest(
-                                id = id,
-                                documentName = document.name,
-                                reason = reason
-                            )
-                        ) }
-                    }
-                } catch (e: Exception) { Log.e("ChatViewModel", "Record Request failed", e) }
-            }
+            state.copy(messages = newList)
         }
     }
 
-    fun approveRecord(requestId: String) {
-        val request = uiState.value.pendingApprovals.find { it.id == requestId } ?: return
-        _uiState.update { it.copy(pendingApprovals = it.pendingApprovals.filter { r -> r.id != requestId }) }
-        
+    fun approveRecord(requestId: String, messageId: String) {
         viewModelScope.launch {
             val doc = uiState.value.documents.find { it.id == requestId } ?: return@launch
             val fullText = doc.fullText ?: documentManager.readDocumentText(doc.name)
             
-            // Re-sending with Full Context as a "System Context" injection
-            sendMessage("System Context: User approved access to '${doc.name}'. Full content is:\n$fullText")
+            // Send as "Hidden Data" - continues the session
+            sendMessage("[SYSTEM_INJECTION: Full content of '${doc.name}' follows]\n$fullText", isHiddenData = true)
         }
     }
 
-    fun rejectRecord(requestId: String) {
-        _uiState.update { it.copy(pendingApprovals = it.pendingApprovals.filter { r -> r.id != requestId }) }
-        // Potentially inform the model that access was denied
+    fun rejectRecord(messageId: String) {
+        _uiState.update { state ->
+            val newList = state.messages.toMutableList()
+            val index = newList.indexOfLast { it.id == messageId }
+            if (index != -1) {
+                newList[index] = newList[index].copy(pendingToolCall = null, isActionResolved = true)
+            }
+            state.copy(messages = newList)
+        }
     }
 
     private fun updateMessage(id: String, text: String, isPending: Boolean, role: ChatRole? = null, reasoning: String? = null) {

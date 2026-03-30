@@ -13,5 +13,14 @@ data class ChatMessage(
     val isPending: Boolean = false,
     val reasoning: String? = null,
     val imageUri: String? = null, // Store the local URI for display
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val pendingToolCall: ToolCallInfo? = null,
+    val isActionResolved: Boolean = false
+)
+
+@kotlinx.serialization.Serializable
+data class ToolCallInfo(
+    val toolCallId: String,
+    val name: String,
+    val arguments: String
 )
