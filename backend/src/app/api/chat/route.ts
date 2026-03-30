@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "@ai-sdk/google";
-import { streamText } from "ai";
+import { streamText, tool } from "ai";
 import { z } from "zod";
 import { ChatRequest } from "@/types/chat";
 
 export async function POST(req: NextRequest) {
   try {
-    console.log("Chat API Request Received (Model: 3.1 Flash-Lite, Multimodal Array)");
-
+    console.log("Chat API Request received");
     const body: ChatRequest = await req.json();
     const { prompt, history, context, attachments } = body;
 
@@ -104,6 +103,12 @@ export async function POST(req: NextRequest) {
           }
         ]
       });
+      
+      // Force synthesis after tool result by appending an explicit instruction
+      messages.push({
+        role: "user" as const,
+        content: "Please synthesize the information from the record I just provided and answer my previous question."
+      });
     } else {
       messages.push({
         role: "user" as const,
@@ -117,18 +122,14 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // FINAL VALIDATION: Ensure tool results follow tool calls
-    // (Self-correction for common AI SDK sequence errors)
-    
     // Log the message sequence for debugging
-    console.log("AGENT_SEQUENCE:", messages.map(m => `[${m.role}] ${m.content?.slice(0, 20)}...`));
+    console.log("AGENT_SEQUENCE:", messages.map(m => `[${m.role}] ${Array.isArray(m.content) ? 'PartArray' : m.content?.slice(0, 20)}...`));
 
     // Use specific content parts for multimodal support
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
       system: systemInstruction,
       messages: messages,
-      prompt: activeToolCallId ? "Please synthesize the information from the record I just provided and answer my previous question." : undefined,
       providerOptions: {
         google: {
           thinkingConfig: {
@@ -138,50 +139,24 @@ export async function POST(req: NextRequest) {
         }
       },
       tools: {
-        update_memory: {
+        update_memory: tool({
           description: "Update a memory file stored on the user's phone.",
-          parameters: z.object({
+          inputSchema: z.object({
             filename: z.string().describe("e.g., 'goals.md'"),
             content: z.string().describe("new markdown content")
           }),
-        } as any,
-        request_medical_record: {
-          description: "Request full-text access to a specific medical record from the user's vault. Use this if the summary in the index is insufficient.",
-          parameters: z.object({
+        }),
+        request_medical_record: tool({
+          description: "Request full-text access to a specific medical record from the user's vault.",
+          inputSchema: z.object({
             record_id: z.string().describe("The ID of the record to request"),
             reason: z.string().describe("A brief explanation for the user of why this record is needed.")
           }),
-        } as any
+        })
       }
     });
 
-    const stream = new ReadableStream({
-      async start(controller) {
-        const encoder = new TextEncoder();
-        try {
-          for await (const part of result.fullStream) {
-            if (part.type === 'text-delta') {
-              controller.enqueue(encoder.encode(`data: 0:${JSON.stringify(part.text)}\n\n`));
-            } else if (part.type === 'reasoning-delta') {
-              controller.enqueue(encoder.encode(`data: r:${JSON.stringify(part.text)}\n\n`));
-            } else if (part.type === 'tool-call') {
-              console.log("AI requested tool:", part.toolName);
-              controller.enqueue(encoder.encode(`data: 9:${JSON.stringify({
-                toolCallId: part.toolCallId,
-                toolName: part.toolName,
-                args: part.input
-              })}\n\n`));
-            }
-          }
-          controller.close();
-        } catch (e) {
-          console.error("Stream error:", e);
-          controller.error(e);
-        }
-      }
-    });
-
-    return new Response(stream, {
+    return (result as any).toDataStreamResponse({
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",

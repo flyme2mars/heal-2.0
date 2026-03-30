@@ -9,8 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@ai-sdk/google": "^3.0.37",
-    "ai": "^6.0.109",
+    "@ai-sdk/google": "^3.0.54",
+    "ai": "^6.0.141",
     "e2b": "^2.13.0",
     "next": "16.1.6",
     "react": "19.2.3",
