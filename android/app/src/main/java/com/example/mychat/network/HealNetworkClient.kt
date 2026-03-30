@@ -53,20 +53,25 @@ class HealNetworkClient @Inject constructor(
             }
 
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                Log.d("HealNetwork", "<<< RAW EVENT: $data")
+                // EXTREME LOGGING: Log EVERY raw event data
+                Log.d("HealNetwork", "<<< RAW EVENT DATA: $data")
+                
                 try {
-                    // AI SDK 6.0 Data Stream Protocol: JSON objects
                     val element = json.parseToJsonElement(data) as? JsonObject ?: return
                     val streamType = element["type"]?.jsonPrimitive?.content ?: return
                     
                     when (streamType) {
                         "text-delta" -> {
-                            val delta = element["delta"]?.jsonPrimitive?.content ?: ""
-                            trySend(HealEvent.TextDelta(delta))
+                            val delta = element["delta"]?.jsonPrimitive?.content 
+                                ?: element["text"]?.jsonPrimitive?.content 
+                                ?: ""
+                            if (delta.isNotEmpty()) trySend(HealEvent.TextDelta(delta))
                         }
                         "reasoning-delta" -> {
-                            val delta = element["delta"]?.jsonPrimitive?.content ?: ""
-                            trySend(HealEvent.ReasoningDelta(delta))
+                            val delta = element["delta"]?.jsonPrimitive?.content 
+                                ?: element["text"]?.jsonPrimitive?.content 
+                                ?: ""
+                            if (delta.isNotEmpty()) trySend(HealEvent.ReasoningDelta(delta))
                         }
                         "tool-call" -> {
                             val toolCallId = element["toolCallId"]?.jsonPrimitive?.content ?: ""
@@ -78,13 +83,15 @@ class HealNetworkClient @Inject constructor(
                             val msg = element["error"]?.jsonPrimitive?.content ?: "Stream error"
                             trySend(HealEvent.Error(msg))
                         }
+                        else -> {
+                            Log.v("HealNetwork", "Ignored event type: $streamType")
+                        }
                     }
                 } catch (e: Exception) {
-                    // Check for legacy or unexpected formats
-                    Log.w("HealNetwork", "Data parse failed: ${e.message}. Attempting legacy parse...")
-                    if (data.startsWith("0:")) {
-                        trySend(HealEvent.TextDelta(data.substring(2).trim('\"')))
-                    }
+                    Log.w("HealNetwork", "JSON parse failed: ${e.message}. Data was: $data")
+                    // Fallback for any legacy prefixes that might be injected by middleware
+                    if (data.startsWith("0:")) trySend(HealEvent.TextDelta(data.substring(2).trim('\"')))
+                    if (data.startsWith("r:")) trySend(HealEvent.ReasoningDelta(data.substring(2).trim('\"')))
                 }
             }
 

@@ -161,8 +161,20 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private fun logTrace(message: String) {
+        try {
+            val logFile = java.io.File(context.filesDir, "network_trace.log")
+            val timestamp = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date())
+            logFile.appendText("[$timestamp] $message\n")
+            Log.d("HealTrace", message)
+        } catch (e: Exception) {
+            Log.e("ChatViewModel", "Logging failed", e)
+        }
+    }
+
     fun sendMessage(userText: String, isHiddenData: Boolean = false, toolCallId: String? = null) {
         if (userText.isBlank() && _uiState.value.selectedImageUri == null) return
+        logTrace("sendMessage: isHidden=$isHiddenData, callId=$toolCallId, text=${userText.take(50)}...")
 
         val sessionId = _uiState.value.activeSessionId ?: return
         val imageUri = _uiState.value.selectedImageUri
@@ -268,14 +280,25 @@ class ChatViewModel @Inject constructor(
 
                 networkClient.streamChat(backendUrl, requestBody, null).collect { event ->
                     when (event) {
-                        is HealEvent.TextDelta -> appendToMessage(targetId, event.text, true)
-                        is HealEvent.ReasoningDelta -> appendToMessage(targetId, null, true, reasoningDelta = event.text)
+                        is HealEvent.TextDelta -> {
+                            logTrace("<<< TextDelta: ${event.text.take(20)}...")
+                            appendToMessage(targetId, event.text, true)
+                        }
+                        is HealEvent.ReasoningDelta -> {
+                            logTrace("<<< ReasoningDelta: ${event.text.take(20)}...")
+                            appendToMessage(targetId, null, true, reasoningDelta = event.text)
+                        }
                         is HealEvent.ToolCall -> {
+                            logTrace("<<< ToolCall: ${event.name}, id=${event.id}")
                             currentToolCalls.add(ToolCallInfo(event.id, event.name, event.arguments))
                             handleToolCall(event, targetId)
                         }
-                        is HealEvent.Error -> updateMessage(targetId, "Error: ${event.message}", false, ChatRole.ERROR)
+                        is HealEvent.Error -> {
+                            logTrace("<<< ERROR: ${event.message}")
+                            updateMessage(targetId, "Error: ${event.message}", false, ChatRole.ERROR)
+                        }
                         is HealEvent.StreamEnd -> {
+                            logTrace("<<< StreamEnd for $targetId")
                             val finalState = _uiState.value.messages.find { it.id == targetId }
                             val finalFullText = finalState?.text ?: ""
                             val finalFullReasoning = finalState?.reasoning ?: ""

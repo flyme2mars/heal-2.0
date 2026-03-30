@@ -1,36 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "@ai-sdk/google";
-import { streamText, tool } from "ai";
+import { streamText, tool, generateText } from "ai";
 import { z } from "zod";
 import { ChatRequest } from "@/types/chat";
 
 export async function POST(req: NextRequest) {
   let lastAttemptedMessages: any[] = [];
   try {
-    console.log(">>> [DEBUG] NEW REQUEST START");
     const body: ChatRequest = await req.json();
     const { prompt, history, context, attachments, toolCallId: activeToolCallId } = body;
 
     const vaultIndex = context.fhir_records?.find(r => r.startsWith("LOCAL VAULT INDEX:")) || "No records in vault.";
 
     const systemInstruction = `
-      You are Heal 2.0, a professional and highly capable health AI agent. 
-      You act as a clinical collaborator, helping users manage their health records and data.
-
-      CRITICAL AGENTIC BEHAVIOR:
-      1. YOU HAVE ACCESS TO A VAULT INDEX. Look at the "CURRENT LOCAL VAULT INDEX" below.
-      2. NEVER ASK THE USER FOR RECORD IDS. The IDs are already provided in the index.
-      3. IF YOU SEE A RELEVANT RECORD, CALL 'request_medical_record' IMMEDIATELY using the ID from the index.
-      4. ALWAYS use 'Thinking' to describe your clinical reasoning process.
-      5. After receiving clinical data (tool result), provide a thorough synthesis and answer the user's original question.
+      You are Heal 2.0, a highly capable clinical health AI.
+      YOU HAVE ACCESS TO A VAULT INDEX. NEVER ASK THE USER FOR RECORD IDS.
+      IDs are in the index below.
 
       CURRENT LOCAL VAULT INDEX:
       ${vaultIndex}
 
-      TONE & STYLE:
-      - Clinical, direct, and empathetic.
-      - No unnecessary greetings. 
-      - If you are calling a tool, explain briefly in 'Thinking' and then execute.
+      AGENTIC WORKFLOW:
+      1. Use 'Thinking' to describe your plan.
+      2. If you need a full record, use 'request_medical_record'. 
+      3. After receiving data, provide a synthesis and answer the user's question.
 
       CONTEXT:
       - Vitals: ${context.health_connect ? JSON.stringify(context.health_connect) : 'None'}
@@ -72,16 +65,19 @@ export async function POST(req: NextRequest) {
               }
             ]
           });
+        } else if (role === 'system') {
+          messages.push({ role: 'system', content: msg.content });
         } else {
-          messages.push({ role: role === 'system' ? 'system' : 'user', content: msg.content });
+          messages.push({ role: 'user', content: msg.content });
         }
       } catch (e) {
-        console.error(`>>> [DEBUG] History Parse Error at index ${idx}:`, e);
+        console.error(`Error parsing history message at index ${idx}:`, e);
       }
     });
 
     // Handle Current
     if (activeToolCallId) {
+      // Manual sequence repair if missing
       const lastMsg = messages[messages.length - 1];
       const hasCall = lastMsg?.role === 'assistant' && 
                       Array.isArray(lastMsg.content) && 
@@ -101,25 +97,25 @@ export async function POST(req: NextRequest) {
       
       messages.push({
         role: "user",
-        content: "I have granted you access to the record. Please synthesize the data and answer my previous question about my chest tightness."
+        content: "Please synthesize the information from the record I just provided and answer my previous question."
       });
     } else {
-      if (attachments?.length) {
+      if (attachments && attachments.length > 0) {
         messages.push({
-          role: "user",
+          role: 'user',
           content: [
-            { type: "text", text: prompt || "" },
-            ...attachments.map(a => ({ type: "image", image: a.url }))
+            { type: 'text', text: prompt || "Please analyze my health status." },
+            ...attachments.map(att => ({ type: 'image' as const, image: att.url }))
           ]
         });
       } else {
-        messages.push({ role: "user", content: prompt || "" });
+        messages.push({ role: 'user', content: prompt || "Please analyze my health status." });
       }
     }
 
     lastAttemptedMessages = messages;
-    console.log("FINAL_AGENT_SEQUENCE:", messages.map(m => `[${m.role}]`));
 
+    // Use specific content parts for multimodal support
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
       system: systemInstruction,
@@ -146,7 +142,7 @@ export async function POST(req: NextRequest) {
     return (result as any).toUIMessageStreamResponse();
 
   } catch (error: any) {
-    console.error(">>> [CRITICAL] 500 ERROR DETECTED:", error.message);
+    console.error("CRITICAL BACKEND ERROR:", error.message);
     return NextResponse.json({ 
       error: error.message,
       debug_sequence: lastAttemptedMessages.map(m => m.role)
