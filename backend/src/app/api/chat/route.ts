@@ -11,9 +11,6 @@ export async function POST(req: NextRequest) {
     const body: ChatRequest = await req.json();
     const { prompt, history, context, attachments, toolCallId: activeToolCallId } = body;
 
-    // Log input metadata
-    console.log(`>>> [DEBUG] Prompt length: ${prompt?.length}, History size: ${history?.length}, ActiveToolCall: ${activeToolCallId}`);
-
     const systemInstruction = `
       You are Heal 2.0, a clinical health AI.
       AGENTIC WORKFLOW:
@@ -30,19 +27,18 @@ export async function POST(req: NextRequest) {
       try {
         if (role === 'assistant') {
           const rawToolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
-          if (rawToolCalls && Array.isArray(rawToolCalls)) {
-            messages.push({
-              role: 'assistant',
-              content: [
-                { type: 'text', text: msg.content || "" },
-                ...rawToolCalls.map((tc: any) => ({
-                  type: 'tool-call',
-                  toolCallId: tc.toolCallId,
-                  toolName: tc.name,
-                  args: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : tc.arguments
-                }))
-              ]
+          if (rawToolCalls && Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
+            const parts: any[] = [];
+            if (msg.content) parts.push({ type: 'text', text: msg.content });
+            rawToolCalls.forEach((tc: any) => {
+              parts.push({
+                type: 'tool-call',
+                toolCallId: tc.toolCallId,
+                toolName: tc.name,
+                args: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : tc.arguments
+              });
             });
+            messages.push({ role: 'assistant', content: parts });
           } else {
             messages.push({ role: 'assistant', content: msg.content || "" });
           }
@@ -52,9 +48,9 @@ export async function POST(req: NextRequest) {
             content: [
               {
                 type: 'tool-result',
-                toolCallId: msg.toolCallId,
+                toolCallId: msg.toolCallId || "missing-id",
                 toolName: 'request_medical_record',
-                result: msg.content
+                result: msg.content 
               }
             ]
           });
@@ -68,39 +64,53 @@ export async function POST(req: NextRequest) {
 
     // Handle Current
     if (activeToolCallId) {
+      // Sequence check: last message must be assistant with tool calls
+      const lastMsg = messages[messages.length - 1];
+      const hasCall = lastMsg?.role === 'assistant' && 
+                      Array.isArray(lastMsg.content) && 
+                      lastMsg.content.some((p: any) => p.type === 'tool-call' && p.toolCallId === activeToolCallId);
+
+      if (!hasCall) {
+        messages.push({
+          role: 'assistant',
+          content: [{ type: 'tool-call', toolCallId: activeToolCallId, toolName: 'request_medical_record', args: { record_id: "auto-repair" } }]
+        });
+      }
+
       messages.push({
         role: "tool",
-        content: [
-          {
-            type: "tool-result",
-            toolCallId: activeToolCallId,
-            toolName: "request_medical_record",
-            result: `[CLINICAL DATA]\n\n${prompt}`
-          }
-        ]
+        content: [{ type: "tool-result", toolCallId: activeToolCallId, toolName: "request_medical_record", result: `[CLINICAL DATA]\n\n${prompt}` }]
       });
-      // Add follow-up user prompt to trigger synthesis
-      messages.push({
-        role: "user",
-        content: "Please synthesize the record above."
-      });
+      messages.push({ role: "user", content: "Please synthesize the record above." });
     } else {
-      messages.push({
-        role: "user",
-        content: attachments?.length ? [
-          { type: "text", text: prompt || "" },
-          ...attachments.map(a => ({ type: "image", image: a.url }))
-        ] : prompt || ""
-      });
+      if (attachments?.length) {
+        messages.push({
+          role: "user",
+          content: [
+            { type: "text", text: prompt || "" },
+            ...attachments.map(a => ({ type: "image", image: a.url }))
+          ]
+        });
+      } else {
+        messages.push({ role: "user", content: prompt || "" });
+      }
     }
 
     lastAttemptedMessages = messages;
-    console.log(">>> [DEBUG] FINAL SEQUENCE:", JSON.stringify(messages.map(m => ({ role: m.role, contentType: typeof m.content })), null, 2));
+    console.log("FINAL_AGENT_SEQUENCE:", messages.map(m => `[${m.role}]`));
 
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
       system: systemInstruction,
       messages: messages,
+      providerOptions: {
+        google: {
+          thinkingConfig: {
+            thinkingLevel: "medium",
+            includeThoughts: true
+          }
+        }
+      },
       tools: {
         request_medical_record: tool({
           description: "Get medical record",
@@ -109,14 +119,11 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    return (result as any).toDataStreamResponse();
+    // In AI SDK 6.0, the recommended way to stream a UI-compatible stream is toUIMessageStreamResponse()
+    return result.toUIMessageStreamResponse();
 
   } catch (error: any) {
-    console.error(">>> [CRITICAL] 500 ERROR DETECTED");
-    console.error(">>> ERROR MESSAGE:", error.message);
-    console.error(">>> ERROR STACK:", error.stack);
-    console.error(">>> ATTEMPTED MESSAGES:", JSON.stringify(lastAttemptedMessages, null, 2));
-    
+    console.error(">>> [CRITICAL] 500 ERROR DETECTED:", error.message);
     return NextResponse.json({ 
       error: error.message,
       debug_sequence: lastAttemptedMessages.map(m => m.role)

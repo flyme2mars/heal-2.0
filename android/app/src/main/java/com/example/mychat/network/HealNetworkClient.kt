@@ -52,8 +52,13 @@ class HealNetworkClient {
             .build()
 
         val listener = object : EventSourceListener() {
-            override fun onOpen(eventSource: EventSource, response: Response) {
+            override fun onOpen(eventSource: EventSource, response: okhttp3.Response) {
                 Log.d("HealNetwork", "SSE Connection Opened. Code: ${response.code}")
+                if (response.code != 200) {
+                    val errorBody = response.body?.string() ?: "No error body"
+                    Log.e("HealNetwork", "SSE Error Body: $errorBody")
+                    trySend(HealEvent.Error("Server error ${response.code}: $errorBody"))
+                }
             }
 
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
@@ -112,8 +117,9 @@ class HealNetworkClient {
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                Log.e("HealNetwork", "SSE Connection Failed. Code: ${response?.code}, Message: ${t?.message}", t)
-                trySend(HealEvent.Error("Connection Failed: ${t?.message ?: "HTTP ${response?.code}"}"))
+                val errorBody = try { response?.peekBody(1024)?.string() } catch (e: Exception) { null }
+                Log.e("HealNetwork", "SSE Connection Failed. Code: ${response?.code}, Message: ${t?.message}, Body: $errorBody", t)
+                trySend(HealEvent.Error("Connection Failed (${response?.code}): ${t?.message}. Body: $errorBody"))
                 close(t)
             }
         }
