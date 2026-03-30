@@ -24,21 +24,77 @@ class ChatViewModel @Inject constructor(
     private val medicalRecordManager: MedicalRecordManager,
     private val documentManager: DocumentManager,
     private val localIndexer: LocalIndexer,
-    private val networkClient: HealNetworkClient
+    private val networkClient: HealNetworkClient,
+    private val chatDao: ChatDao
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
     
     val uiState: StateFlow<ChatUiState> = combine(
         _uiState,
-        documentManager.getAllDocuments()
-    ) { state: ChatUiState, docs: List<HealthDocument> ->
-        state.copy(documents = docs)
+        documentManager.getAllDocuments(),
+        chatDao.getAllSessions()
+    ) { state: ChatUiState, docs: List<HealthDocument>, sessions: List<ChatSessionEntity> ->
+        state.copy(
+            documents = docs,
+            sessions = sessions
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ChatUiState())
 
     init {
         refreshUserData()
         checkHealthPermissions()
+        initializeSession()
+    }
+
+    private fun initializeSession() {
+        viewModelScope.launch {
+            val sessions = chatDao.getAllSessions().firstOrNull()
+            if (sessions.isNullOrEmpty()) {
+                createNewSession()
+            } else {
+                loadSession(sessions.first().id)
+            }
+        }
+    }
+
+    fun createNewSession() {
+        viewModelScope.launch {
+            val sessionId = java.util.UUID.randomUUID().toString()
+            val newSession = ChatSessionEntity(
+                id = sessionId,
+                title = "New Health Chat",
+                createdAt = System.currentTimeMillis(),
+                lastUpdatedAt = System.currentTimeMillis()
+            )
+            chatDao.insertSession(newSession)
+            loadSession(sessionId)
+        }
+    }
+
+    fun loadSession(sessionId: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(activeSessionId = sessionId) }
+            val messages = chatDao.getMessagesForSessionList(sessionId).map { entity ->
+                ChatMessage(
+                    id = entity.id.toString(),
+                    text = entity.content,
+                    role = ChatRole.valueOf(entity.role.uppercase()),
+                    timestamp = entity.timestamp,
+                    reasoning = entity.reasoning
+                )
+            }
+            _uiState.update { it.copy(messages = messages) }
+        }
+    }
+
+    fun deleteSession(sessionId: String) {
+        viewModelScope.launch {
+            chatDao.deleteSession(sessionId)
+            if (_uiState.value.activeSessionId == sessionId) {
+                initializeSession()
+            }
+        }
     }
 
     private fun checkHealthPermissions() {
@@ -103,6 +159,7 @@ class ChatViewModel @Inject constructor(
     fun sendMessage(userText: String) {
         if (userText.isBlank() && _uiState.value.selectedImageUri == null) return
 
+        val sessionId = _uiState.value.activeSessionId ?: return
         val imageUri = _uiState.value.selectedImageUri
         val userMessage = ChatMessage(
             text = userText, 
@@ -115,6 +172,14 @@ class ChatViewModel @Inject constructor(
         ) }
 
         viewModelScope.launch {
+            // Persist User Message
+            chatDao.insertMessage(ChatMessageEntity(
+                sessionId = sessionId,
+                role = "user",
+                content = userText,
+                timestamp = System.currentTimeMillis()
+            ))
+
             val modelMessage = ChatMessage(text = "", role = ChatRole.MODEL, isPending = true)
             _uiState.update { it.copy(messages = it.messages + modelMessage) }
 
@@ -123,6 +188,11 @@ class ChatViewModel @Inject constructor(
                 val medicalSummary = medicalRecordManager.getMedicalSummary()
                 val memorySnapshot = documentManager.getMemorySnapshot()
                 
+                // Get History for Context (Last 10 messages)
+                val history = chatDao.getMessagesForSessionList(sessionId).takeLast(10).map { 
+                    mapOf("role" to it.role, "content" to it.content)
+                }
+
                 // Agent Context: Only sending Metadata "Map"
                 val docMap = uiState.value.documents.joinToString("\n") { 
                     "- ID: ${it.id} | Label: ${it.userLabel ?: it.name} | Type: ${it.recordType ?: "Unknown"} | Tags: ${it.tags.joinToString(", ")} | Date: ${it.recordDate ?: "No Date"} | AI Summary: ${it.summary}"
@@ -137,6 +207,7 @@ class ChatViewModel @Inject constructor(
 
                 val request = ChatRequest(
                     prompt = userText,
+                    history = history, // Pass history to backend
                     context = ChatContext(
                         health_connect = mapOf("summary" to healthSummary),
                         fhir_records = listOf(medicalSummary, "LOCAL VAULT INDEX:\n$docMap"),
@@ -172,7 +243,22 @@ class ChatViewModel @Inject constructor(
                             handleToolCall(event, modelMessage.id)
                         }
                         is HealEvent.Error -> updateMessage(modelMessage.id, "Error: ${event.message}", false, ChatRole.ERROR)
-                        is HealEvent.StreamEnd -> updateMessage(modelMessage.id, fullResponseText, false, reasoning = fullReasoningText)
+                        is HealEvent.StreamEnd -> {
+                            updateMessage(modelMessage.id, fullResponseText, false, reasoning = fullReasoningText)
+                            // Persist Assistant Message
+                            chatDao.insertMessage(ChatMessageEntity(
+                                sessionId = sessionId,
+                                role = "assistant",
+                                content = fullResponseText,
+                                reasoning = fullReasoningText,
+                                timestamp = System.currentTimeMillis()
+                            ))
+                            // Update session title if first message
+                            if (uiState.value.messages.size <= 3) {
+                                val newTitle = if (userText.length > 30) userText.take(27) + "..." else userText
+                                chatDao.updateSessionTitle(sessionId, newTitle, System.currentTimeMillis())
+                            }
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -294,8 +380,6 @@ class ChatViewModel @Inject constructor(
             documentManager.updateUserLabel(documentId, newLabel)
         }
     }
-
-    fun clearChat() { _uiState.update { it.copy(messages = emptyList()) } }
 }
 
 data class PermissionRequest(
@@ -306,6 +390,8 @@ data class PermissionRequest(
 
 data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
+    val sessions: List<ChatSessionEntity> = emptyList(),
+    val activeSessionId: String? = null,
     val isSyncing: Boolean = false,
     val healthPermissionGranted: Boolean = false,
     val medicalSummary: String = "No medical records found.",

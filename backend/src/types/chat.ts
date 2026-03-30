@@ -1,5 +1,6 @@
 export interface ChatRequest {
   prompt: string;
+  history?: { role: string; content: string }[];
   context: ChatContext;
   attachments?: ChatAttachment[];
 }

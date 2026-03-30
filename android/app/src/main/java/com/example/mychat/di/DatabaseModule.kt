@@ -30,4 +30,9 @@ object DatabaseModule {
     fun provideHealthDocumentDao(database: HealthDatabase): HealthDocumentDao {
         return database.healthDocumentDao()
     }
+
+    @Provides
+    fun provideChatDao(database: HealthDatabase): com.example.mychat.data.ChatDao {
+        return database.chatDao()
+    }
 }

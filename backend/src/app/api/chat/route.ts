@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     console.log("Chat API Request Received (Model: 3.1 Flash-Lite, Multimodal Array)");
 
     const body: ChatRequest = await req.json();
-    const { prompt, context, attachments } = body;
+    const { prompt, history, context, attachments } = body;
 
     if (!prompt && !attachments?.length) {
       return NextResponse.json({ error: "Missing prompt or attachment" }, { status: 400 });
@@ -32,27 +32,34 @@ export async function POST(req: NextRequest) {
       4. Be concise and actionable.
 
       CONTEXT:
-      - Health Vitals: ${context.health_connect ? Object.entries(context.health_connect).map(([k, v]) => `${k}: ${v}`).join(', ') : 'No data available'}
+      - Health Vitals: ${context.health_connect ? JSON.stringify(context.health_connect) : 'No data available'}
       - Medical Summary: ${context.fhir_records?.join('\n') || 'No clinical records on file.'}
       - Internal Memory: ${Object.entries(context.memory_snapshot).map(([file, content]) => `File ${file}: ${content}`).join('\n')}
     `;
+
+    // 2026 Context Engineering: Convert history to AI SDK messages
+    const pastMessages: any[] = (history || []).map(msg => ({
+      role: msg.role === 'assistant' ? 'assistant' : 'user',
+      content: msg.content
+    }));
+
+    // Add current prompt with attachments
+    const currentMessage = {
+      role: "user" as const,
+      content: [
+        { type: "text", text: prompt || "Please analyze my health status." },
+        ...(attachments || []).map(att => ({
+          type: "image" as const,
+          image: att.url,
+        }))
+      ]
+    };
 
     // Use specific content parts for multimodal support
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
       system: systemInstruction,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: prompt || "Please analyze my health status." },
-            ...(attachments || []).map(att => ({
-              type: "image" as const,
-              image: att.url,
-            }))
-          ]
-        }
-      ],
+      messages: [...pastMessages, currentMessage],
       providerOptions: {
         google: {
           thinkingConfig: {

@@ -86,22 +86,89 @@ fun ChatScreen(
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet {
-                Spacer(Modifier.height(12.dp))
-                Text("Heal 2.0 Menu", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Heal Agent", 
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp), 
+                    style = MaterialTheme.typography.headlineSmall, 
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                
                 NavigationDrawerItem(
-                    label = { Text("Chat") },
+                    label = { Text("Active Chat", fontWeight = FontWeight.Bold) },
                     selected = true,
                     onClick = { scope.launch { drawerState.close() } },
-                    icon = { Icon(Icons.Default.Chat, contentDescription = null) },
+                    icon = { Icon(Icons.Default.ChatBubble, null) },
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                 )
+                
                 NavigationDrawerItem(
                     label = { Text("Health Data Vault") },
                     selected = false,
-                    onClick = { scope.launch { drawerState.close(); onNavigateToVault() } },
-                    icon = { Icon(Icons.Default.HealthAndSafety, contentDescription = null) },
+                    onClick = { 
+                        scope.launch { drawerState.close(); onNavigateToVault() } 
+                    },
+                    icon = { Icon(Icons.Default.Storage, null) },
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                 )
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp, horizontal = 24.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Recent Chats", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    IconButton(onClick = { viewModel.createNewSession() }) {
+                        Icon(Icons.Default.Add, "New Chat", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                LazyColumn(
+                    modifier = Modifier.weight(1f).padding(horizontal = 12.dp)
+                ) {
+                    items(uiState.sessions) { session ->
+                        val isSelected = uiState.activeSessionId == session.id
+                        NavigationDrawerItem(
+                            label = { 
+                                Text(
+                                    session.title, 
+                                    maxLines = 1, 
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                ) 
+                            },
+                            selected = isSelected,
+                            onClick = { 
+                                viewModel.loadSession(session.id)
+                                scope.launch { drawerState.close() }
+                            },
+                            icon = { Icon(if (isSelected) Icons.Default.ChatBubble else Icons.Default.Chat, null, modifier = Modifier.size(18.dp)) },
+                            badge = {
+                                if (isSelected) {
+                                    IconButton(onClick = { viewModel.deleteSession(session.id) }) {
+                                        Icon(Icons.Default.DeleteOutline, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        )
+                    }
+                }
+                
+                // User Profile & Settings at bottom
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceContainer
+                ) {
+                    Column(modifier = Modifier.padding(24.dp)) {
+                        Text(uiState.userName.ifBlank { "Heal User" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(uiState.userWeight.ifBlank { "Weight: --" }, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
             }
         }
     ) {
@@ -136,7 +203,7 @@ fun ChatScreen(
                                 tint = if (uiState.healthPermissionGranted) Color(0xFFE91E63) else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        FilledTonalIconButton(onClick = { scope.launch { isClearing = true; delay(300); viewModel.clearChat(); isClearing = false } }) {
+                        FilledTonalIconButton(onClick = { viewModel.createNewSession() }) {
                             Icon(Icons.Default.Add, contentDescription = "New Chat")
                         }
                     }

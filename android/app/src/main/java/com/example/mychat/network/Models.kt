@@ -2,9 +2,12 @@ package com.example.mychat.network
 
 import kotlinx.serialization.Serializable
 
+import kotlinx.serialization.json.JsonElement
+
 @Serializable
 data class ChatRequest(
     val prompt: String,
+    val history: List<Map<String, String>> = emptyList(),
     val context: ChatContext,
     val attachments: List<ChatAttachment> = emptyList()
 )
