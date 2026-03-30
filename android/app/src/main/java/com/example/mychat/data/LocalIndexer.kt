@@ -17,7 +17,8 @@ import java.io.InputStream
 @Singleton
 class LocalIndexer @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val documentManager: DocumentManager
+    private val documentManager: DocumentManager,
+    private val geminiNano: GeminiNanoManager
 ) {
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
@@ -34,15 +35,14 @@ class LocalIndexer @Inject constructor(
             
             documentManager.updateFullText(document.id, rawText)
 
-            // 2. Local Summarization using Gemini Nano (AI Core 2026)
-            // In a real 2026 environment, this uses the AICore service
-            val summaryInfo = summarizeLocally(rawText)
+            // 2. Local Summarization using Simulated Gemini Nano
+            val analysis = geminiNano.analyzeMedicalText(rawText)
             
             documentManager.updateMetadata(
                 document.id, 
-                summaryInfo.summary, 
-                summaryInfo.type, 
-                summaryInfo.date
+                analysis.summary, 
+                analysis.type, 
+                analysis.date
             )
             
             Log.d("LocalIndexer", "Indexing complete for ${document.name}")
@@ -100,64 +100,5 @@ class LocalIndexer @Inject constructor(
             "PDF extraction failed: ${e.message}"
         }
     }
-
-    private suspend fun summarizeLocally(text: String): SummaryResult {
-        Log.d("LocalIndexer", "Analysing text for summary...")
-        
-        val lines = text.lines().filter { it.isNotBlank() }
-        val lowerText = text.lowercase()
-        
-        // 1. Better Type Detection
-        val type = when {
-            lowerText.contains("blood") || lowerText.contains("hematology") || lowerText.contains("glucose") -> "Blood Test"
-            lowerText.contains("mri") || lowerText.contains("resonance") || lowerText.contains("imaging") -> "Radiology Report"
-            lowerText.contains("prescription") || lowerText.contains("rx") || lowerText.contains("medication") -> "Prescription"
-            lowerText.contains("vaccination") || lowerText.contains("immunization") -> "Vaccination Record"
-            lowerText.contains("discharge") || lowerText.contains("hospital") -> "Discharge Summary"
-            lowerText.contains("cardiology") || lowerText.contains("ecg") || lowerText.contains("ekg") -> "Cardiology Report"
-            else -> "Medical Document"
-        }
-        
-        // 2. Better Date Extraction (Improved Regex)
-        val dateRegex = """(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})|([A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4})""".toRegex()
-        val date = dateRegex.find(text)?.value ?: "2026-03-30"
-        
-        // 3. Better Summary Generation
-        // Try to find the "Impression", "Conclusion", or "Summary" section
-        val summaryKeywords = listOf("impression", "conclusion", "summary", "diagnosis", "result", "plan")
-        var summaryText = ""
-        
-        for (keyword in summaryKeywords) {
-            val index = lowerText.indexOf(keyword)
-            if (index != -1) {
-                val start = index + keyword.length
-                val end = (start + 200).coerceAtMost(text.length)
-                summaryText = text.substring(start, end)
-                    .replace("""\n""", " ")
-                    .replace("""[:\-=]""", "")
-                    .trim()
-                if (summaryText.length > 50) break
-            }
-        }
-        
-        if (summaryText.isBlank()) {
-            // Fallback: Use the first 2-3 non-empty lines
-            summaryText = lines.take(3).joinToString(" ")
-        }
-        
-        // Clean up and truncate
-        val finalSummary = if (summaryText.length > 150) {
-            summaryText.take(147) + "..."
-        } else {
-            summaryText
-        }.replace("""\s+""".toRegex(), " ")
-
-        return SummaryResult(
-            summary = if (finalSummary.length < 10) "General $type details." else finalSummary,
-            type = type,
-            date = date
-        )
-    }
-
-    data class SummaryResult(val summary: String, val type: String, val date: String?)
 }
+
