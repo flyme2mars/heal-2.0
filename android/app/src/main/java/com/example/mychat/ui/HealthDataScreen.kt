@@ -1,5 +1,6 @@
 package com.example.mychat.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -54,6 +55,10 @@ fun HealthDataScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val dateFormatter = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()) }
+
+    BackHandler {
+        onBack()
+    }
 
     var isEditing by remember { mutableStateOf(false) }
     var nameInput by remember { mutableStateOf("") }
