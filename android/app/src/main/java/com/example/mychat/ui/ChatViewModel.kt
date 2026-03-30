@@ -81,9 +81,11 @@ class ChatViewModel @Inject constructor(
                     text = entity.content,
                     role = ChatRole.valueOf(entity.role.uppercase()),
                     timestamp = entity.timestamp,
-                    reasoning = entity.reasoning
+                    reasoning = entity.reasoning,
+                    toolCallId = entity.toolCallId,
+                    toolCalls = entity.toolCallsJson
                 )
-            }
+            }.filter { it.role != ChatRole.TOOL && it.role != ChatRole.SYSTEM } // Hide internal data from UI but keep in DB
             _uiState.update { it.copy(messages = messages) }
         }
     }
@@ -156,7 +158,7 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun sendMessage(userText: String, isHiddenData: Boolean = false) {
+    fun sendMessage(userText: String, isHiddenData: Boolean = false, toolCallId: String? = null) {
         if (userText.isBlank() && _uiState.value.selectedImageUri == null) return
 
         val sessionId = _uiState.value.activeSessionId ?: return
@@ -176,12 +178,19 @@ class ChatViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            // Persist User Message (even if hidden context, we store it for history)
+            // Persist message with correct role
+            val dbRole = when {
+                toolCallId != null -> "tool"
+                isHiddenData -> "system"
+                else -> "user"
+            }
+            
             chatDao.insertMessage(ChatMessageEntity(
                 sessionId = sessionId,
-                role = if (isHiddenData) "system" else "user",
+                role = dbRole,
                 content = userText,
-                timestamp = System.currentTimeMillis()
+                timestamp = System.currentTimeMillis(),
+                toolCallId = toolCallId
             ))
 
             val modelMessage = ChatMessage(text = "", role = ChatRole.MODEL, isPending = true)
@@ -195,7 +204,7 @@ class ChatViewModel @Inject constructor(
                     val lastModel = newList.findLast { it.role == ChatRole.MODEL || it.role == ChatRole.ASSISTANT }
                     if (lastModel != null) {
                         val index = newList.indexOf(lastModel)
-                        newList[index] = lastModel.copy(isPending = true, isActionResolved = true)
+                        newList[index] = lastModel.copy(isPending = true, isActionResolved = true, pendingToolCall = null)
                     }
                     state.copy(messages = newList)
                 }
@@ -211,9 +220,15 @@ class ChatViewModel @Inject constructor(
                 val medicalSummary = medicalRecordManager.getMedicalSummary()
                 val memorySnapshot = documentManager.getMemorySnapshot()
                 
-                // Get History (Last 15 messages)
-                val history = chatDao.getMessagesForSessionList(sessionId).takeLast(15).map { 
-                    mapOf("role" to it.role, "content" to it.content)
+                // 2026 History Construction: Include Tool Metadata
+                val history = chatDao.getMessagesForSessionList(sessionId).takeLast(20).map { 
+                    val map = mutableMapOf(
+                        "role" to it.role,
+                        "content" to it.content
+                    )
+                    it.toolCallId?.let { id -> map["toolCallId"] = id }
+                    it.toolCallsJson?.let { json -> map["toolCalls"] = json }
+                    map.toMap()
                 }
 
                 // Discovery Index
@@ -236,19 +251,21 @@ class ChatViewModel @Inject constructor(
                         fhir_records = listOf(medicalSummary, "LOCAL VAULT INDEX:\n$docMap"),
                         memory_snapshot = memorySnapshot
                     ),
-                    attachments = attachments
+                    attachments = attachments,
+                    toolCallId = toolCallId
                 )
 
                 val backendUrl = "https://heal-eight.vercel.app/api/chat"
                 val json = Json { ignoreUnknownKeys = true }
                 val requestBody = json.encodeToString(request)
-                var fullResponseText = if (isHiddenData) {
-                    _uiState.value.messages.find { it.id == targetId }?.text ?: ""
-                } else ""
-                var fullReasoningText = if (isHiddenData) {
-                    _uiState.value.messages.find { it.id == targetId }?.reasoning ?: ""
-                } else ""
+                
+                var currentMessageState = _uiState.value.messages.find { it.id == targetId }
+                var fullResponseText = if (isHiddenData) currentMessageState?.text ?: "" else ""
+                var fullReasoningText = if (isHiddenData) currentMessageState?.reasoning ?: "" else ""
                 var lastUpdateTime = System.currentTimeMillis()
+                
+                // Track tool calls for final persistence
+                val currentToolCalls = mutableListOf<ToolCallInfo>()
 
                 networkClient.streamChat(backendUrl, requestBody, null).collect { event ->
                     when (event) {
@@ -267,18 +284,28 @@ class ChatViewModel @Inject constructor(
                             }
                         }
                         is HealEvent.ToolCall -> {
+                            val info = ToolCallInfo(event.id, event.name, event.arguments)
+                            currentToolCalls.add(info)
                             handleToolCall(event, targetId)
                         }
                         is HealEvent.Error -> updateMessage(targetId, "Error: ${event.message}", false, ChatRole.ERROR)
                         is HealEvent.StreamEnd -> {
                             updateMessage(targetId, fullResponseText, false, reasoning = fullReasoningText)
+                            
+                            // Persist Assistant Message WITH tool calls if any
+                            val toolCallsJson = if (currentToolCalls.isNotEmpty()) {
+                                json.encodeToString(currentToolCalls)
+                            } else null
+
                             chatDao.insertMessage(ChatMessageEntity(
                                 sessionId = sessionId,
                                 role = "assistant",
                                 content = fullResponseText,
                                 reasoning = fullReasoningText,
-                                timestamp = System.currentTimeMillis()
+                                timestamp = System.currentTimeMillis(),
+                                toolCallsJson = toolCallsJson
                             ))
+                            
                             if (!isHiddenData && uiState.value.messages.size <= 3) {
                                 val newTitle = if (userText.length > 30) userText.take(27) + "..." else userText
                                 chatDao.updateSessionTitle(sessionId, newTitle, System.currentTimeMillis())
@@ -306,7 +333,8 @@ class ChatViewModel @Inject constructor(
             if (index != -1) {
                 newList[index] = newList[index].copy(
                     isPending = false,
-                    pendingToolCall = info
+                    pendingToolCall = info,
+                    toolCallId = event.id // Store active call ID
                 )
             }
             state.copy(messages = newList)
@@ -318,8 +346,15 @@ class ChatViewModel @Inject constructor(
             val doc = uiState.value.documents.find { it.id == requestId } ?: return@launch
             val fullText = doc.fullText ?: documentManager.readDocumentText(doc.name)
             
-            // Send as "Hidden Data" - continues the session
-            sendMessage("[SYSTEM_INJECTION: Full content of '${doc.name}' follows]\n$fullText", isHiddenData = true)
+            val activeMessage = _uiState.value.messages.find { it.id == messageId }
+            val callId = activeMessage?.pendingToolCall?.toolCallId
+            
+            // Send as "Tool Result" - continues the session
+            sendMessage(
+                userText = fullText, 
+                isHiddenData = true, 
+                toolCallId = callId
+            )
         }
     }
 

@@ -40,30 +40,81 @@ export async function POST(req: NextRequest) {
 
     // 2026 Context Engineering: Convert history to AI SDK messages
     const pastMessages: any[] = (history || []).map(msg => {
-      // Treat hidden system injections as 'system' or 'user' roles for context
-      const isInternal = msg.content.startsWith("[SYSTEM_INJECTION:");
+      const role = msg.role.toLowerCase();
+      
+      if (role === 'assistant') {
+        const toolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
+        return {
+          role: 'assistant' as const,
+          content: msg.content,
+          toolCalls: toolCalls?.map((tc: any) => ({
+            type: 'function',
+            id: tc.toolCallId,
+            function: {
+              name: tc.name,
+              arguments: tc.arguments
+            }
+          }))
+        };
+      }
+
+      if (role === 'tool') {
+        return {
+          role: 'tool' as const,
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: msg.toolCallId,
+              toolName: 'request_medical_record', // Default for this app
+              result: msg.content
+            }
+          ]
+        };
+      }
+
+      if (role === 'system') {
+        return {
+          role: 'system' as const,
+          content: msg.content
+        };
+      }
+
+      // Default to User
       return {
-        role: msg.role === 'assistant' ? 'assistant' : 'user',
+        role: 'user' as const,
         content: msg.content
       };
     });
 
     // If it's a system injection, we can optionally wrap it as a more authoritative system message
-    const currentPromptText = isSystemInjection 
-      ? `SYSTEM MEMORY UPDATE: ${prompt}`
-      : prompt || "Please analyze my health status.";
+    // BUT if toolCallId is present, we should actually treat the current prompt as a tool result!
+    let currentMessage: any;
+    const activeToolCallId = (body as any).toolCallId;
 
-    // Add current prompt with attachments
-    const currentMessage = {
-      role: "user" as const,
-      content: [
-        { type: "text", text: currentPromptText },
-        ...(attachments || []).map(att => ({
-          type: "image" as const,
-          image: att.url,
-        }))
-      ]
-    };
+    if (activeToolCallId) {
+      currentMessage = {
+        role: "tool" as const,
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: activeToolCallId,
+            toolName: "request_medical_record",
+            result: prompt
+          }
+        ]
+      };
+    } else {
+      currentMessage = {
+        role: "user" as const,
+        content: [
+          { type: "text", text: isSystemInjection ? `SYSTEM MEMORY UPDATE: ${prompt}` : prompt || "Please analyze my health status." },
+          ...(attachments || []).map(att => ({
+            type: "image" as const,
+            image: att.url,
+          }))
+        ]
+      };
+    }
 
     // Use specific content parts for multimodal support
     const result = streamText({

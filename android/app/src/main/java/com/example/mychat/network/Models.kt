@@ -9,7 +9,8 @@ data class ChatRequest(
     val prompt: String,
     val history: List<Map<String, String>> = emptyList(),
     val context: ChatContext,
-    val attachments: List<ChatAttachment> = emptyList()
+    val attachments: List<ChatAttachment> = emptyList(),
+    val toolCallId: String? = null
 )
 
 @Serializable

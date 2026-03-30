@@ -55,11 +55,13 @@ data class ChatSessionEntity(
 data class ChatMessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val sessionId: String,
-    val role: String, // "user", "assistant", "system"
+    val role: String, // "user", "assistant", "system", "tool"
     val content: String,
-    val reasoning: String? = null, // For 2026 reasoning-delta streams
+    val reasoning: String? = null,
     val timestamp: Long,
-    val metadata: String? = null // JSON for tool calls, image URLs, etc.
+    val metadata: String? = null, // JSON for UI metadata
+    val toolCallId: String? = null, // For tool results
+    val toolCallsJson: String? = null // For assistant messages with tool calls
 )
 
 @Dao
@@ -121,7 +123,7 @@ interface ChatDao {
     suspend fun clearSessionHistory(sessionId: String)
 }
 
-@Database(entities = [HealthDocumentEntity::class, ChatSessionEntity::class, ChatMessageEntity::class], version = 5)
+@Database(entities = [HealthDocumentEntity::class, ChatSessionEntity::class, ChatMessageEntity::class], version = 6)
 abstract class HealthDatabase : RoomDatabase() {
     abstract fun healthDocumentDao(): HealthDocumentDao
     abstract fun chatDao(): ChatDao
