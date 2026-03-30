@@ -9,8 +9,9 @@ export const maxDuration = 60;
 export async function POST(req: NextRequest) {
   let lastAttemptedMessages: ModelMessage[] = [];
   try {
-    console.log(">>> [DEBUG] AGENT REQUEST START");
-    const body: ChatRequest = await req.json();
+    const rawBody = await req.text();
+    console.log(`>>> [DEBUG] Payload Size: ${rawBody.length} bytes`);
+    const body: ChatRequest = JSON.parse(rawBody);
     const { prompt, history, context, attachments, toolCallId: activeToolCallId } = body;
 
     const vaultIndex = context.fhir_records?.find(r => r.startsWith("LOCAL VAULT INDEX:")) || "No records in vault.";
