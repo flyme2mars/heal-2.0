@@ -74,13 +74,13 @@ class GeminiNanoManager @Inject constructor(
         val date = dateRegex.find(text)?.value
         
         val finalSummary = when {
-            detectedSymptom.isNotEmpty() && summaryLine.contains("Diagnosis", ignoreCase = true) -> {
-                "Presented with $detectedSymptom. $summaryLine"
+            summaryLine.contains("Diagnosis", ignoreCase = true) || summaryLine.contains("Impression", ignoreCase = true) -> {
+                summaryLine
             }
             detectedSymptom.isNotEmpty() -> {
                 "Medical evaluation for $detectedSymptom."
             }
-            summaryLine.length > 30 -> summaryLine
+            summaryLine.length > 20 -> summaryLine
             else -> "Medical record regarding $primaryTopic findings."
         }
 
@@ -92,34 +92,49 @@ class GeminiNanoManager @Inject constructor(
     }
 
     private fun extractSignificantLine(text: String, lowerText: String): String {
-        // Find lines containing diagnosis or findings
-        val lines = text.lines().map { it.trim() }.filter { it.length > 10 }
+        val lines = text.lines().map { it.trim() }.filter { it.length > 5 }
         
-        // Priority 1: "Diagnosis:" or "Impression:"
-        val diagnosisMarkers = listOf("diagnosis", "impression", "assessment", "conclusion", "clinical finding", "plan")
-        for (marker in diagnosisMarkers) {
-            val markerLine = lines.find { it.lowercase().contains("$marker:") }
-            if (markerLine != null) {
-                val content = markerLine.substringAfter(":").trim()
-                if (content.length > 5) return "$marker: $content"
-            }
-            
-            // Check the line immediately AFTER the marker if the marker is on its own line
-            val exactMarkerIndex = lines.indexOfFirst { it.lowercase() == marker || it.lowercase() == "$marker:" }
-            if (exactMarkerIndex != -1 && exactMarkerIndex < lines.size - 1) {
-                val nextLine = lines[exactMarkerIndex + 1]
-                if (nextLine.length > 10) return "$marker: $nextLine"
-            }
-        }
-        
-        // Priority 2: Mention of symptoms or main findings
-        val symptoms = listOf("chest pain", "tightness", "shortness of breath", "palpitations", "dizziness")
-        for (s in symptoms) {
-            val symptomLine = lines.find { it.lowercase().contains(s) }
-            if (symptomLine != null) return symptomLine
+        // 1. Noise Filtering: Ignore Administrative Headers
+        val noiseKeywords = listOf("patient", "dob", "date of birth", "mrn", "gender", "sex", "age", "address", "physician", "provider", "facility", "location", "collected", "received", "reported")
+        val clinicalLines = lines.filter { line ->
+            val lowerLine = line.lowercase()
+            !noiseKeywords.any { noise -> lowerLine.startsWith(noise) || (lowerLine.contains(noise) && lowerLine.contains(":")) }
         }
 
-        return lines.firstOrNull { it.length > 20 } ?: "Summary of medical record."
+        // Priority 1: High-Signal Sections (Diagnosis, Impression, Plan)
+        val sectionMarkers = listOf("diagnosis", "impression", "assessment", "conclusion", "clinical finding", "plan", "results", "history of present illness")
+        for (marker in sectionMarkers) {
+            val markerIndex = clinicalLines.indexOfFirst { it.lowercase().contains("$marker:") }
+            if (markerIndex != -1) {
+                val line = clinicalLines[markerIndex]
+                val content = line.substringAfter(":").trim()
+                
+                // If the content is on the same line and long enough, use it
+                if (content.length > 10) return "$marker: $content"
+                
+                // If content is short or empty, check the next few lines for a paragraph
+                val paragraph = StringBuilder()
+                var j = markerIndex + 1
+                while (j < clinicalLines.size && j < markerIndex + 4) {
+                    val nextLine = clinicalLines[j]
+                    if (sectionMarkers.any { nextLine.lowercase().contains("$it:") }) break
+                    paragraph.append(nextLine).append(" ")
+                    j++
+                }
+                if (paragraph.length > 15) return "$marker: ${paragraph.toString().trim()}"
+            }
+        }
+        
+        // Priority 2: Symptom-specific phrases
+        val symptoms = listOf("chest pain", "tightness", "shortness of breath", "palpitations", "dizziness", "cough", "fever", "pain", "nausea")
+        for (s in symptoms) {
+            val symptomLine = clinicalLines.find { it.lowercase().contains(s) }
+            if (symptomLine != null && symptomLine.length > 20) return symptomLine
+        }
+
+        // Priority 3: First "Real" Sentence of Clinical Note
+        // Skip common headers and find the first line that looks like a sentence (ends with period or > 40 chars)
+        return clinicalLines.firstOrNull { it.length > 40 || it.endsWith(".") } ?: clinicalLines.firstOrNull { it.length > 20 } ?: "Summary of medical record."
     }
 
     data class AnalysisResult(val summary: String, val type: String, val date: String?)
