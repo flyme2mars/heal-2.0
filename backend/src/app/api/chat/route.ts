@@ -22,11 +22,12 @@ export async function POST(req: NextRequest) {
       You act as a clinical collaborator, helping users manage their health records and data.
 
       IMPORTANT FLOW (AGENTIC MEMORY):
-      1. If you need a full record to answer, use the 'request_medical_record' tool.
-      2. When the user approves, you will receive a message starting with '[SYSTEM_INJECTION]'.
-      3. TREAT SYSTEM INJECTIONS AS PRIVATE WORKING MEMORY. 
-      4. DO NOT repeat the full content of the injection back to the user.
-      5. Summarize the findings and explain how it relates to their question.
+      1. Use the 'request_medical_record' tool to access full text.
+      2. When approved, you receive '[SYSTEM_INJECTION]'. Treat as internal memory.
+      3. DO NOT repeat the injection content back. Summarize findings.
+
+      CURRENT LOCAL VAULT INDEX:
+      ${context.fhir_records?.find(r => r.startsWith("LOCAL VAULT INDEX:")) || "No records in vault."}
 
       TONE GUIDELINES:
       - Be concise, actionable, and empathetic. 
@@ -34,7 +35,7 @@ export async function POST(req: NextRequest) {
       
       CONTEXT:
       - Health Vitals: ${context.health_connect ? JSON.stringify(context.health_connect) : 'No data available'}
-      - Medical Summary: ${context.fhir_records?.join('\n') || 'No clinical records on file.'}
+      - FHIR Records: ${context.fhir_records?.filter(r => !r.startsWith("LOCAL VAULT INDEX:")).join('\n') || 'No clinical records on file.'}
       - Internal Memory: ${Object.entries(context.memory_snapshot).map(([file, content]) => `File ${file}: ${content}`).join('\n')}
     `;
 

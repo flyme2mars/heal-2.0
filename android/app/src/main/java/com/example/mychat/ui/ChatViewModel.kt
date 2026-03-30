@@ -44,17 +44,21 @@ class ChatViewModel @Inject constructor(
     init {
         refreshUserData()
         checkHealthPermissions()
-        initializeSession()
+        viewModelScope.launch {
+            val recovered = documentManager.reconcileVault()
+            recovered.forEach { doc ->
+                localIndexer.indexDocument(doc)
+            }
+            initializeSession()
+        }
     }
 
-    private fun initializeSession() {
-        viewModelScope.launch {
-            val sessions = chatDao.getAllSessions().firstOrNull()
-            if (sessions.isNullOrEmpty()) {
-                createNewSession()
-            } else {
-                loadSession(sessions.first().id)
-            }
+    private suspend fun initializeSession() {
+        val sessions = chatDao.getAllSessions().firstOrNull()
+        if (sessions.isNullOrEmpty()) {
+            createNewSession()
+        } else {
+            loadSession(sessions.first().id)
         }
     }
 
@@ -233,7 +237,7 @@ class ChatViewModel @Inject constructor(
 
                 // Discovery Index
                 val docMap = uiState.value.documents.joinToString("\n") { 
-                    "- ID: ${it.id} | Label: ${it.userLabel ?: it.name} | Type: ${it.recordType ?: "Unknown"} | Tags: ${it.tags.joinToString(", ")} | Date: ${it.recordDate ?: "No Date"} | AI Summary: ${it.summary}"
+                    "DOCUMENT [ID: ${it.id}] | Label: ${it.userLabel ?: it.name} | Type: ${it.recordType ?: "Unknown"} | Tags: ${it.tags.joinToString(", ")} | Date: ${it.recordDate ?: "No Date"} | AI Summary: ${it.summary}"
                 }
 
                 val attachments = mutableListOf<ChatAttachment>()
@@ -342,12 +346,20 @@ class ChatViewModel @Inject constructor(
     }
 
     fun approveRecord(requestId: String, messageId: String) {
+        Log.d("ChatViewModel", "approveRecord called for docId: $requestId, messageId: $messageId")
         viewModelScope.launch {
-            val doc = uiState.value.documents.find { it.id == requestId } ?: return@launch
+            val doc = uiState.value.documents.find { it.id == requestId }
+            if (doc == null) {
+                Log.e("ChatViewModel", "Could not find document with ID: $requestId in ${uiState.value.documents.size} docs")
+                return@launch
+            }
+            
             val fullText = doc.fullText ?: documentManager.readDocumentText(doc.name)
+            Log.d("ChatViewModel", "Document text loaded (length: ${fullText.length}). Sending hidden data...")
             
             val activeMessage = _uiState.value.messages.find { it.id == messageId }
             val callId = activeMessage?.pendingToolCall?.toolCallId
+            Log.d("ChatViewModel", "Using toolCallId: $callId for follow-up")
             
             // Send as "Tool Result" - continues the session
             sendMessage(
@@ -420,7 +432,17 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun refreshMedicalSummary() = refreshUserData()
+    fun refreshMedicalSummary() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncing = true) }
+            val recovered = documentManager.reconcileVault()
+            recovered.forEach { doc ->
+                localIndexer.indexDocument(doc)
+            }
+            refreshUserData()
+            _uiState.update { it.copy(isSyncing = false) }
+        }
+    }
 
     fun deleteDocument(document: HealthDocument) { viewModelScope.launch { documentManager.deleteDocument(document) } }
     

@@ -302,14 +302,30 @@ fun MessageBubble(
                                 IntentApprovalCard(
                                     tool = tool,
                                     onApprove = { 
+                                        android.util.Log.d("HealUI", "Approve clicked for tool: ${tool.name}, callId: ${tool.toolCallId}")
                                         try {
                                             val json = Json { ignoreUnknownKeys = true }
                                             val args = json.parseToJsonElement(tool.arguments) as JsonObject
-                                            val id = args["id"]?.jsonPrimitive?.content ?: ""
+                                            
+                                            // Robust ID extraction
+                                            var id = args["id"]?.jsonPrimitive?.content ?: ""
+                                            if (id.isBlank()) {
+                                                id = args.entries.find { it.key.contains("id", ignoreCase = true) }?.value?.jsonPrimitive?.content ?: ""
+                                            }
+                                            
+                                            // Clean the ID (remove leading dashes, spaces, or extra quotes)
+                                            id = id.trim().removePrefix("-").trim().replace("\"", "")
+                                            
+                                            android.util.Log.d("HealUI", "Extracted ID for approval: '$id'")
                                             viewModel.approveRecord(id, message.id)
-                                        } catch (e: Exception) { }
+                                        } catch (e: Exception) { 
+                                            android.util.Log.e("HealUI", "Failed to parse tool arguments for approval", e)
+                                        }
                                     },
-                                    onReject = { viewModel.rejectRecord(message.id) }
+                                    onReject = { 
+                                        android.util.Log.d("HealUI", "Reject clicked for message: ${message.id}")
+                                        viewModel.rejectRecord(message.id) 
+                                    }
                                 )
                             }
                             
@@ -402,16 +418,14 @@ fun IntentApprovalCard(
                 OutlinedButton(
                     onClick = onReject,
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(0.dp)
+                    shape = RoundedCornerShape(12.dp)
                 ) {
                     Text("Deny", style = MaterialTheme.typography.labelMedium)
                 }
                 Button(
                     onClick = onApprove,
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(0.dp)
+                    shape = RoundedCornerShape(12.dp)
                 ) {
                     Text("Approve", style = MaterialTheme.typography.labelMedium)
                 }

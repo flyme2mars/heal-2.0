@@ -448,12 +448,20 @@ fun HealthDataScreen(
             }
 
             item {
-                Text(
-                    "Medical Records",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Medical Records",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    IconButton(onClick = { viewModel.refreshMedicalSummary() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh Index", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
             }
 
             if (uiState.documents.isEmpty()) {

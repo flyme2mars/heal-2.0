@@ -141,6 +141,51 @@ class DocumentManager @Inject constructor(
         return context.filesDir.listFiles { _, name -> name.startsWith("doc_") }?.toList() ?: emptyList()
     }
 
+    suspend fun reconcileVault(): List<HealthDocument> {
+        android.util.Log.d("DocumentManager", "reconcileVault STARTED")
+        val recovered = mutableListOf<HealthDocument>()
+        try {
+            val diskFiles = listDocuments()
+            android.util.Log.d("DocumentManager", "Found ${diskFiles.size} doc files on disk")
+            val dbDocs = healthDocumentDao.getAllDocumentsList()
+            android.util.Log.d("DocumentManager", "Found ${dbDocs.size} docs in DB")
+            val dbPaths = dbDocs.map { it.internalPath }.toSet()
+
+            diskFiles.forEach { file ->
+                if (file.name !in dbPaths) {
+                    android.util.Log.w("DocumentManager", "Found zombie file on disk: ${file.name}. Recovering...")
+                    val id = file.name.removePrefix("doc_").substringBeforeLast(".")
+                    val originalName = "Recovered_$id"
+                    val extension = file.name.substringAfterLast(".")
+                    
+                    val docEntity = HealthDocumentEntity(
+                        id = id,
+                        name = originalName,
+                        type = if (extension.lowercase() == "pdf") "pdf" else "image",
+                        internalPath = file.name,
+                        timestamp = file.lastModified(),
+                        summary = "Recovered from storage. Re-indexing...",
+                        userLabel = "Recovered Record ($id)"
+                    )
+                    healthDocumentDao.insertDocument(docEntity)
+                    
+                    recovered.add(HealthDocument(
+                        id = docEntity.id,
+                        name = docEntity.name,
+                        type = docEntity.type,
+                        internalPath = docEntity.internalPath,
+                        timestamp = docEntity.timestamp,
+                        summary = docEntity.summary,
+                        userLabel = docEntity.userLabel
+                    ))
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("DocumentManager", "Vault reconciliation failed", e)
+        }
+        return recovered
+    }
+
     suspend fun deleteDocument(document: HealthDocument) {
         try {
             val file = File(context.filesDir, document.internalPath)
