@@ -119,13 +119,28 @@ fun HealthDataScreen(
                             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
                             .padding(12.dp)
                     ) {
-                        LazyColumn {
-                            item {
-                                Text(
-                                    doc.fullText ?: "Full text not available or still processing.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    lineHeight = 20.sp
-                                )
+                        Column {
+                            val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+                            IconButton(
+                                onClick = { 
+                                    doc.fullText?.let { 
+                                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(it))
+                                        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.align(Alignment.End).size(24.dp)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, null, Modifier.size(16.dp))
+                            }
+                            LazyColumn {
+                                item {
+                                    Text(
+                                        doc.fullText ?: "Full text not available or still processing.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        lineHeight = 22.sp,
+                                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                    )
+                                }
                             }
                         }
                     }

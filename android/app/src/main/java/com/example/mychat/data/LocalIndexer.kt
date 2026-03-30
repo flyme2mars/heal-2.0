@@ -78,23 +78,44 @@ class LocalIndexer @Inject constructor(
     private suspend fun extractTextFromPdf(document: HealthDocument): String {
         return try {
             val file = documentManager.getTempFile(document)
-            val renderer = android.graphics.pdf.PdfRenderer(android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY))
+            val pfd = android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+            val renderer = android.graphics.pdf.PdfRenderer(pfd)
             val textBuilder = StringBuilder()
+            
+            // 2026 Strategy: Render at high DPI for accurate OCR of medical text
+            val scaleFactor = 3f // Increase resolution by 3x (approx 300 DPI)
             
             for (i in 0 until renderer.pageCount) {
                 val page = renderer.openPage(i)
-                val bitmap = Bitmap.createBitmap(page.width, page.height, Bitmap.Config.ARGB_8888)
+                
+                val width = (page.width * scaleFactor).toInt()
+                val height = (page.height * scaleFactor).toInt()
+                
+                // Create a high-resolution bitmap for this page
+                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                // Fill with white background (important for OCR)
+                val canvas = android.graphics.Canvas(bitmap)
+                canvas.drawColor(android.graphics.Color.WHITE)
+                
                 page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                 
                 val image = InputImage.fromBitmap(bitmap, 0)
                 val result = recognizer.process(image).await()
-                textBuilder.append(result.text).append("\n")
+                
+                if (result.text.isNotBlank()) {
+                    textBuilder.append("--- Page ${i + 1} ---\n")
+                    textBuilder.append(result.text).append("\n\n")
+                }
                 
                 page.close()
+                bitmap.recycle() // Free memory immediately
             }
             renderer.close()
+            pfd.close()
             file.delete()
-            textBuilder.toString()
+            
+            val finalResult = textBuilder.toString()
+            if (finalResult.isBlank()) "No text could be extracted from this PDF." else finalResult
         } catch (e: Exception) {
             Log.e("LocalIndexer", "PDF extraction failed", e)
             "PDF extraction failed: ${e.message}"
