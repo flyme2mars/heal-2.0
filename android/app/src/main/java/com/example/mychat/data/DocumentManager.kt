@@ -103,6 +103,15 @@ class DocumentManager @Inject constructor(
         healthDocumentDao.updateFullText(id, text)
     }
 
+    fun getTempFile(document: HealthDocument): File {
+        val tempFile = File(context.cacheDir, "temp_${document.id}.${if(document.type == "pdf") "pdf" else "img"}")
+        val inputStream = getDocumentDecryptStream(document)
+        tempFile.outputStream().use { output ->
+            inputStream.copyTo(output)
+        }
+        return tempFile
+    }
+
     fun getDocumentDecryptStream(document: HealthDocument): java.io.InputStream {
         val file = File(context.filesDir, document.internalPath)
         val encryptedFile = EncryptedFile.Builder(
@@ -137,26 +146,28 @@ class DocumentManager @Inject constructor(
 
     suspend fun readDocumentText(filename: String): String {
         return try {
-            val docs = healthDocumentDao.getAllDocumentsList()
-            val doc = docs.find { it.name == filename } ?: return "File not found in vault."
+            val entities = healthDocumentDao.getAllDocumentsList()
+            val entity = entities.find { it.name == filename } ?: return "File not found in vault."
             
-            val inputStream = getDocumentDecryptStream(
-                HealthDocument(
-                    id = doc.id, 
-                    name = doc.name, 
-                    type = doc.type, 
-                    internalPath = doc.internalPath, 
-                    timestamp = doc.timestamp, 
-                    summary = doc.summary
-                )
+            if (!entity.fullText.isNullOrBlank()) {
+                return entity.fullText
+            }
+
+            val doc = HealthDocument(
+                id = entity.id, 
+                name = entity.name, 
+                type = entity.type, 
+                internalPath = entity.internalPath, 
+                timestamp = entity.timestamp, 
+                summary = entity.summary,
+                fullText = entity.fullText
             )
             
+            val inputStream = getDocumentDecryptStream(doc)
             val content = inputStream.bufferedReader().use { it.readText() }
             
-            if (doc.type == "pdf") {
-                // PDF extraction would normally happen here. 
-                // For now, we return the raw text or a note about the format.
-                "This is a PDF document titled '${doc.name}'. Content extraction in progress..."
+            if (entity.type == "pdf") {
+                "PDF Content not indexed yet for '${entity.name}'."
             } else {
                 content
             }

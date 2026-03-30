@@ -55,16 +55,19 @@ class LocalIndexer @Inject constructor(
     private suspend fun extractText(document: HealthDocument): String {
         return try {
             val inputStream = documentManager.getDocumentDecryptStream(document)
-            if (document.type == "image") {
-                val bitmap = BitmapFactory.decodeStream(inputStream)
-                val image = InputImage.fromBitmap(bitmap, 0)
-                val result = recognizer.process(image).await()
-                result.text
-            } else if (document.type == "pdf") {
-                // In 2026, ML Kit handles PDFs directly or we use a PDF library
-                "PDF Content Extraction Placeholder for ${document.name}"
-            } else {
-                inputStream.bufferedReader().use { it.readText() }
+            when (document.type) {
+                "image" -> {
+                    val bitmap = BitmapFactory.decodeStream(inputStream)
+                    val image = InputImage.fromBitmap(bitmap, 0)
+                    val result = recognizer.process(image).await()
+                    result.text
+                }
+                "pdf" -> {
+                    extractTextFromPdf(document)
+                }
+                else -> {
+                    inputStream.bufferedReader().use { it.readText() }
+                }
             }
         } catch (e: Exception) {
             Log.e("LocalIndexer", "OCR Failed", e)
@@ -72,28 +75,88 @@ class LocalIndexer @Inject constructor(
         }
     }
 
+    private suspend fun extractTextFromPdf(document: HealthDocument): String {
+        return try {
+            val file = documentManager.getTempFile(document)
+            val renderer = android.graphics.pdf.PdfRenderer(android.os.ParcelFileDescriptor.open(file, android.os.ParcelFileDescriptor.MODE_READ_ONLY))
+            val textBuilder = StringBuilder()
+            
+            for (i in 0 until renderer.pageCount) {
+                val page = renderer.openPage(i)
+                val bitmap = Bitmap.createBitmap(page.width, page.height, Bitmap.Config.ARGB_8888)
+                page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                
+                val image = InputImage.fromBitmap(bitmap, 0)
+                val result = recognizer.process(image).await()
+                textBuilder.append(result.text).append("\n")
+                
+                page.close()
+            }
+            renderer.close()
+            file.delete()
+            textBuilder.toString()
+        } catch (e: Exception) {
+            Log.e("LocalIndexer", "PDF extraction failed", e)
+            "PDF extraction failed: ${e.message}"
+        }
+    }
+
     private suspend fun summarizeLocally(text: String): SummaryResult {
-        // This is a 2026 implementation of Gemini Nano via AI Core
-        // Note: For this demo, we simulate the structured output of Nano
-        Log.d("LocalIndexer", "Requesting Gemini Nano summary...")
+        Log.d("LocalIndexer", "Analysing text for summary...")
         
-        // In 2026, the Prompt API would look like this:
-        // val session = AICore.createSession("summarization-v2")
-        // val result = session.prompt("Identify type, date, and 1-sentence summary of: $text")
-        
-        // Simulating Nano's extraction capabilities:
+        val lines = text.lines().filter { it.isNotBlank() }
         val lowerText = text.lowercase()
+        
+        // 1. Better Type Detection
         val type = when {
-            lowerText.contains("blood") || lowerText.contains("hematology") -> "Blood Test"
-            lowerText.contains("mri") || lowerText.contains("resonance") -> "MRI Scan"
-            lowerText.contains("prescription") || lowerText.contains("rx") -> "Prescription"
-            else -> "Medical Record"
+            lowerText.contains("blood") || lowerText.contains("hematology") || lowerText.contains("glucose") -> "Blood Test"
+            lowerText.contains("mri") || lowerText.contains("resonance") || lowerText.contains("imaging") -> "Radiology Report"
+            lowerText.contains("prescription") || lowerText.contains("rx") || lowerText.contains("medication") -> "Prescription"
+            lowerText.contains("vaccination") || lowerText.contains("immunization") -> "Vaccination Record"
+            lowerText.contains("discharge") || lowerText.contains("hospital") -> "Discharge Summary"
+            lowerText.contains("cardiology") || lowerText.contains("ecg") || lowerText.contains("ekg") -> "Cardiology Report"
+            else -> "Medical Document"
         }
         
-        val summary = "Medical record regarding ${type.lowercase()} details."
-        val date = "2026-03-30" // Placeholder date extraction
+        // 2. Better Date Extraction (Improved Regex)
+        val dateRegex = """(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})|([A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4})""".toRegex()
+        val date = dateRegex.find(text)?.value ?: "2026-03-30"
         
-        return SummaryResult(summary, type, date)
+        // 3. Better Summary Generation
+        // Try to find the "Impression", "Conclusion", or "Summary" section
+        val summaryKeywords = listOf("impression", "conclusion", "summary", "diagnosis", "result", "plan")
+        var summaryText = ""
+        
+        for (keyword in summaryKeywords) {
+            val index = lowerText.indexOf(keyword)
+            if (index != -1) {
+                val start = index + keyword.length
+                val end = (start + 200).coerceAtMost(text.length)
+                summaryText = text.substring(start, end)
+                    .replace("""\n""", " ")
+                    .replace("""[:\-=]""", "")
+                    .trim()
+                if (summaryText.length > 50) break
+            }
+        }
+        
+        if (summaryText.isBlank()) {
+            // Fallback: Use the first 2-3 non-empty lines
+            summaryText = lines.take(3).joinToString(" ")
+        }
+        
+        // Clean up and truncate
+        val finalSummary = if (summaryText.length > 150) {
+            summaryText.take(147) + "..."
+        } else {
+            summaryText
+        }.replace("""\s+""".toRegex(), " ")
+
+        return SummaryResult(
+            summary = if (finalSummary.length < 10) "General $type details." else finalSummary,
+            type = type,
+            date = date
+        )
     }
 
     data class SummaryResult(val summary: String, val type: String, val date: String?)

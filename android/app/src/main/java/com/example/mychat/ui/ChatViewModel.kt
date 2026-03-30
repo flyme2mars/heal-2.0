@@ -38,6 +38,35 @@ class ChatViewModel @Inject constructor(
 
     init {
         refreshUserData()
+        checkHealthPermissions()
+    }
+
+    private fun checkHealthPermissions() {
+        viewModelScope.launch {
+            val granted = healthManager.hasAllPermissions()
+            _uiState.update { it.copy(healthPermissionGranted = granted) }
+        }
+    }
+
+    fun onHealthPermissionResult() {
+        checkHealthPermissions()
+    }
+
+    fun syncHealthData() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncing = true) }
+            try {
+                if (healthManager.hasAllPermissions()) {
+                    val summary = healthManager.fetchHealthSummary()
+                    _uiState.update { it.copy(healthPermissionGranted = true) }
+                    // We can also trigger a refresh of other data if needed
+                }
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Health sync failed", e)
+            } finally {
+                _uiState.update { it.copy(isSyncing = false) }
+            }
+        }
     }
 
     private fun refreshUserData() {
@@ -271,6 +300,7 @@ data class PermissionRequest(
 data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val isSyncing: Boolean = false,
+    val healthPermissionGranted: Boolean = false,
     val medicalSummary: String = "No medical records found.",
     val documents: List<HealthDocument> = emptyList(),
     val pendingApprovals: List<PermissionRequest> = emptyList(),

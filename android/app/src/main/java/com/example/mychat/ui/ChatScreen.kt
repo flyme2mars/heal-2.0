@@ -47,6 +47,12 @@ fun ChatScreen(
     var showFullScreenImage by remember { mutableStateOf<String?>(null) }
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
+    val healthPermissionLauncher = rememberLauncherForActivityResult(
+        androidx.health.connect.client.PermissionController.createRequestPermissionResultContract()
+    ) { granted ->
+        viewModel.onHealthPermissionResult()
+    }
+
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri ->
@@ -107,8 +113,28 @@ fun ChatScreen(
                         IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, contentDescription = "Menu") }
                     },
                     actions = {
-                        IconButton(onClick = { /* Health Permission Flow */ }) {
-                            Icon(Icons.Default.Favorite, contentDescription = "Health Connect", tint = MaterialTheme.colorScheme.primary)
+                        val healthManager = androidx.health.connect.client.HealthConnectClient.getSdkStatus(LocalContext.current)
+                        IconButton(onClick = { 
+                            if (uiState.healthPermissionGranted) {
+                                viewModel.syncHealthData()
+                            } else {
+                                healthPermissionLauncher.launch(
+                                    setOf(
+                                        androidx.health.connect.client.permission.HealthPermission.getReadPermission(androidx.health.connect.client.records.StepsRecord::class),
+                                        androidx.health.connect.client.permission.HealthPermission.getReadPermission(androidx.health.connect.client.records.HeartRateRecord::class),
+                                        androidx.health.connect.client.permission.HealthPermission.getReadPermission(androidx.health.connect.client.records.SleepSessionRecord::class),
+                                        androidx.health.connect.client.permission.HealthPermission.getReadPermission(androidx.health.connect.client.records.OxygenSaturationRecord::class),
+                                        androidx.health.connect.client.permission.HealthPermission.getReadPermission(androidx.health.connect.client.records.TotalCaloriesBurnedRecord::class),
+                                        androidx.health.connect.client.permission.HealthPermission.getReadPermission(androidx.health.connect.client.records.ActiveCaloriesBurnedRecord::class)
+                                    )
+                                )
+                            }
+                        }) {
+                            Icon(
+                                Icons.Default.Favorite, 
+                                contentDescription = "Health Connect", 
+                                tint = if (uiState.healthPermissionGranted) Color(0xFFE91E63) else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                         FilledTonalIconButton(onClick = { scope.launch { isClearing = true; delay(300); viewModel.clearChat(); isClearing = false } }) {
                             Icon(Icons.Default.Add, contentDescription = "New Chat")
