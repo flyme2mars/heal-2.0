@@ -9,6 +9,7 @@ export const maxDuration = 60;
 export async function POST(req: NextRequest) {
   let lastAttemptedMessages: ModelMessage[] = [];
   try {
+    console.log(">>> [DEBUG] AGENT REQUEST START");
     const body: ChatRequest = await req.json();
     const { prompt, history, context, attachments, toolCallId: activeToolCallId } = body;
 
@@ -16,16 +17,16 @@ export async function POST(req: NextRequest) {
 
     const systemInstruction = `
       You are Heal 2.0, a professional clinical health AI.
-      INDEX: ${vaultIndex}
-      
-      BEHAVIOR:
-      - Use 'request_medical_record' for clinical data.
-      - NEVER ask for IDs. 
-      - Always provide synthesis after results.
+      VAULT INDEX: ${vaultIndex}
+      AGENTIC WORKFLOW:
+      1. NEVER ask for IDs. Pull them from the index.
+      2. Call 'request_medical_record' for clinical data.
+      3. After receiving data, provide a synthesis immediately.
     `;
 
     const messages: ModelMessage[] = [];
 
+    // Map history
     (history || []).forEach((msg, idx) => {
       const role = msg.role.toLowerCase();
       try {
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest) {
                 type: 'tool-result',
                 toolCallId: msg.toolCallId || "unknown",
                 toolName: 'request_medical_record',
-                output: msg.content // Runtime fallback
+                output: msg.content 
               } as any
             ]
           });
@@ -64,11 +65,13 @@ export async function POST(req: NextRequest) {
           messages.push({ role: 'user', content: msg.content });
         }
       } catch (e) {
-        console.error(`History error ${idx}:`, e);
+        console.error(`History error at ${idx}:`, e);
       }
     });
 
+    // Handle Current
     if (activeToolCallId) {
+      // Manual sequence repair
       const last = messages[messages.length - 1];
       const hasCall = last?.role === 'assistant' && 
                       Array.isArray(last.content) && 
@@ -81,7 +84,7 @@ export async function POST(req: NextRequest) {
             type: 'tool-call', 
             toolCallId: activeToolCallId, 
             toolName: 'request_medical_record', 
-            args: { record_id: "auto-repaired" } 
+            args: { record_id: "auto-repair" } 
           } as any]
         });
       }
@@ -92,29 +95,30 @@ export async function POST(req: NextRequest) {
           type: 'tool-result',
           toolCallId: activeToolCallId,
           toolName: 'request_medical_record',
-          output: prompt 
+          output: `[SYSTEM DATA] AUTHORIZED ACCESS TO RECORD. CONTENT: ${prompt}`
         } as any]
       });
 
       messages.push({
         role: 'user',
-        content: "AUTHORIZED. Analyze the record and explain my chest tightness."
+        content: "Analyze the clinical record authorized above. Answer my previous question about chest tightness."
       });
     } else {
       if (attachments && attachments.length > 0) {
         messages.push({
           role: 'user',
           content: [
-            { type: 'text', text: prompt || "Analyze status." },
-            ...attachments.map(a => ({ type: 'image' as const, image: a.url }))
+            { type: 'text', text: prompt || "Analyze my status." },
+            ...attachments.map(att => ({ type: 'image' as const, image: att.url }))
           ]
         });
       } else {
-        messages.push({ role: 'user', content: prompt || "Analyze status." });
+        messages.push({ role: 'user', content: prompt || "Analyze my status." });
       }
     }
 
     lastAttemptedMessages = messages;
+    console.log("TRACE:", messages.map(m => `[${m.role}]`));
 
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
@@ -130,7 +134,7 @@ export async function POST(req: NextRequest) {
       },
       tools: {
         request_medical_record: tool({
-          description: "Get medical record.",
+          description: "Get medical record",
           inputSchema: z.object({
             record_id: z.string(),
             reason: z.string()
@@ -142,7 +146,7 @@ export async function POST(req: NextRequest) {
     return (result as any).toUIMessageStreamResponse();
 
   } catch (error: any) {
-    console.error("ERROR:", error.message);
+    console.error("CRITICAL ERROR:", error.message);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

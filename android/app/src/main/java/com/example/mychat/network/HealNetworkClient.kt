@@ -35,42 +35,29 @@ class HealNetworkClient @Inject constructor(
             .url(url)
             .post(requestBody.toRequestBody("application/json".toMediaType()))
             .header("Accept", "text/event-stream")
-            .apply {
-                if (appCheckToken != null) {
-                    header("X-Firebase-AppCheck", appCheckToken)
-                }
-            }
+            .header("x-vercel-ai-ui-message-stream", "v1")
             .build()
 
         val listener = object : EventSourceListener() {
             override fun onOpen(eventSource: EventSource, response: Response) {
                 Log.d("HealNetwork", "SSE Connection Opened. Code: ${response.code}")
-                if (response.code != 200) {
-                    val body = try { response.peekBody(1024).string() } catch(e: Exception) { "unavailable" }
-                    Log.e("HealNetwork", "Server Error Body: $body")
-                    trySend(HealEvent.Error("Server returned ${response.code}: $body"))
-                }
             }
 
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                // EXTREME LOGGING: Log EVERY raw event data
-                Log.d("HealNetwork", "<<< RAW EVENT DATA: $data")
-                
+                Log.d("HealNetwork", "<<< RAW EVENT: $data")
                 try {
                     val element = json.parseToJsonElement(data) as? JsonObject ?: return
                     val streamType = element["type"]?.jsonPrimitive?.content ?: return
                     
                     when (streamType) {
                         "text-delta" -> {
-                            val delta = element["delta"]?.jsonPrimitive?.content 
-                                ?: element["text"]?.jsonPrimitive?.content 
-                                ?: ""
+                            // AI SDK 6.0 StreamTextPart for text-delta uses "text" field
+                            val delta = element["text"]?.jsonPrimitive?.content ?: ""
                             if (delta.isNotEmpty()) trySend(HealEvent.TextDelta(delta))
                         }
                         "reasoning-delta" -> {
-                            val delta = element["delta"]?.jsonPrimitive?.content 
-                                ?: element["text"]?.jsonPrimitive?.content 
-                                ?: ""
+                            // AI SDK 6.0 StreamTextPart for reasoning-delta uses "text" field
+                            val delta = element["text"]?.jsonPrimitive?.content ?: ""
                             if (delta.isNotEmpty()) trySend(HealEvent.ReasoningDelta(delta))
                         }
                         "tool-call" -> {
@@ -83,15 +70,9 @@ class HealNetworkClient @Inject constructor(
                             val msg = element["error"]?.jsonPrimitive?.content ?: "Stream error"
                             trySend(HealEvent.Error(msg))
                         }
-                        else -> {
-                            Log.v("HealNetwork", "Ignored event type: $streamType")
-                        }
                     }
                 } catch (e: Exception) {
-                    Log.w("HealNetwork", "JSON parse failed: ${e.message}. Data was: $data")
-                    // Fallback for any legacy prefixes that might be injected by middleware
-                    if (data.startsWith("0:")) trySend(HealEvent.TextDelta(data.substring(2).trim('\"')))
-                    if (data.startsWith("r:")) trySend(HealEvent.ReasoningDelta(data.substring(2).trim('\"')))
+                    Log.w("HealNetwork", "Parse fail: ${e.message}")
                 }
             }
 
@@ -102,17 +83,13 @@ class HealNetworkClient @Inject constructor(
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                val errorBody = try { response?.peekBody(1024)?.string() } catch (e: Exception) { null }
-                Log.e("HealNetwork", "SSE Connection Failed. Code: ${response?.code}, Body: $errorBody", t)
-                trySend(HealEvent.Error("Connection Failed (${response?.code}): ${t?.message}"))
+                Log.e("HealNetwork", "SSE Failure", t)
+                trySend(HealEvent.Error("Connection Failed: ${t?.message}"))
                 close(t)
             }
         }
 
         val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
-
-        awaitClose {
-            eventSource.cancel()
-        }
+        awaitClose { eventSource.cancel() }
     }
 }
