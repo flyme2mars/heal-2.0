@@ -4,18 +4,15 @@ import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.*
+import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
-import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+import javax.inject.Singleton
 
 sealed class HealEvent {
     data class TextDelta(val text: String) : HealEvent()
@@ -25,25 +22,19 @@ sealed class HealEvent {
     object StreamEnd : HealEvent()
 }
 
-class HealNetworkClient {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS) 
-        .writeTimeout(15, TimeUnit.SECONDS)
-        .build()
-
+@Singleton
+class HealNetworkClient @Inject constructor(
+    private val client: OkHttpClient
+) {
     private val json = Json { ignoreUnknownKeys = true }
 
     fun streamChat(url: String, requestBody: String, appCheckToken: String?): Flow<HealEvent> = callbackFlow {
         Log.d("HealNetwork", ">>> REQUEST BODY: $requestBody")
-        Log.d("HealNetwork", "Starting stream to: $url")
         
         val request = Request.Builder()
             .url(url)
             .post(requestBody.toRequestBody("application/json".toMediaType()))
             .header("Accept", "text/event-stream")
-            .header("User-Agent", "Heal2.0-Android")
-            .header("Cache-Control", "no-cache")
             .apply {
                 if (appCheckToken != null) {
                     header("X-Firebase-AppCheck", appCheckToken)
@@ -52,61 +43,48 @@ class HealNetworkClient {
             .build()
 
         val listener = object : EventSourceListener() {
-            override fun onOpen(eventSource: EventSource, response: okhttp3.Response) {
+            override fun onOpen(eventSource: EventSource, response: Response) {
                 Log.d("HealNetwork", "SSE Connection Opened. Code: ${response.code}")
                 if (response.code != 200) {
-                    val errorBody = response.body?.string() ?: "No error body"
-                    Log.e("HealNetwork", "SSE Error Body: $errorBody")
-                    trySend(HealEvent.Error("Server error ${response.code}: $errorBody"))
+                    val body = try { response.peekBody(1024).string() } catch(e: Exception) { "unavailable" }
+                    Log.e("HealNetwork", "Server Error Body: $body")
+                    trySend(HealEvent.Error("Server returned ${response.code}: $body"))
                 }
             }
 
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                Log.d("HealNetwork", "Event: $data")
+                Log.d("HealNetwork", "<<< RAW EVENT: $data")
                 try {
-                    if (data.length > 2 && data[1] == ':') {
-                        val typeChar = data[0]
-                        val payload = data.substring(2)
-                        
-                        if (typeChar == '0') {
-                            val cleanText = if (payload.startsWith("\"") && payload.endsWith("\"")) {
-                                payload.substring(1, payload.length - 1)
-                                    .replace("\\n", "\n")
-                                    .replace("\\\"", "\"")
-                            } else {
-                                payload
-                            }
-                            trySend(HealEvent.TextDelta(cleanText))
-                            return
-                        }
-
-                        if (typeChar == 'r') {
-                            val cleanText = if (payload.startsWith("\"") && payload.endsWith("\"")) {
-                                payload.substring(1, payload.length - 1)
-                                    .replace("\\n", "\n")
-                                    .replace("\\\"", "\"")
-                            } else {
-                                payload
-                            }
-                            trySend(HealEvent.ReasoningDelta(cleanText))
-                            return
-                        }
-
-                        if (typeChar == '9') {
-                            val toolJson = json.parseToJsonElement(payload) as JsonObject
-                            val toolName = toolJson["toolName"]?.jsonPrimitive?.content ?: ""
-                            val args = toolJson["args"]?.toString() ?: ""
-                            val callId = toolJson["toolCallId"]?.jsonPrimitive?.content ?: ""
-                            trySend(HealEvent.ToolCall(callId, toolName, args))
-                            return
-                        }
-                    }
+                    // AI SDK 6.0 Data Stream Protocol: JSON objects
+                    val element = json.parseToJsonElement(data) as? JsonObject ?: return
+                    val streamType = element["type"]?.jsonPrimitive?.content ?: return
                     
-                    if (data.isNotEmpty()) {
-                        trySend(HealEvent.TextDelta(data))
+                    when (streamType) {
+                        "text-delta" -> {
+                            val delta = element["delta"]?.jsonPrimitive?.content ?: ""
+                            trySend(HealEvent.TextDelta(delta))
+                        }
+                        "reasoning-delta" -> {
+                            val delta = element["delta"]?.jsonPrimitive?.content ?: ""
+                            trySend(HealEvent.ReasoningDelta(delta))
+                        }
+                        "tool-call" -> {
+                            val toolCallId = element["toolCallId"]?.jsonPrimitive?.content ?: ""
+                            val toolName = element["toolName"]?.jsonPrimitive?.content ?: ""
+                            val args = element["args"]?.jsonObject?.toString() ?: "{}"
+                            trySend(HealEvent.ToolCall(toolCallId, toolName, args))
+                        }
+                        "error" -> {
+                            val msg = element["error"]?.jsonPrimitive?.content ?: "Stream error"
+                            trySend(HealEvent.Error(msg))
+                        }
                     }
                 } catch (e: Exception) {
-                    Log.e("HealNetwork", "Parser Error", e)
+                    // Check for legacy or unexpected formats
+                    Log.w("HealNetwork", "Data parse failed: ${e.message}. Attempting legacy parse...")
+                    if (data.startsWith("0:")) {
+                        trySend(HealEvent.TextDelta(data.substring(2).trim('\"')))
+                    }
                 }
             }
 
@@ -118,14 +96,13 @@ class HealNetworkClient {
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 val errorBody = try { response?.peekBody(1024)?.string() } catch (e: Exception) { null }
-                Log.e("HealNetwork", "SSE Connection Failed. Code: ${response?.code}, Message: ${t?.message}, Body: $errorBody", t)
-                trySend(HealEvent.Error("Connection Failed (${response?.code}): ${t?.message}. Body: $errorBody"))
+                Log.e("HealNetwork", "SSE Connection Failed. Code: ${response?.code}, Body: $errorBody", t)
+                trySend(HealEvent.Error("Connection Failed (${response?.code}): ${t?.message}"))
                 close(t)
             }
         }
 
-        val eventSource = EventSources.createFactory(client)
-            .newEventSource(request, listener)
+        val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
 
         awaitClose {
             eventSource.cancel()

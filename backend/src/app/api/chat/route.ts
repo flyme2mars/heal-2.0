@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "@ai-sdk/google";
-import { streamText, tool } from "ai";
+import { streamText, tool, createDataStreamResponse } from "ai";
 import { z } from "zod";
 import { ChatRequest } from "@/types/chat";
 
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
 
     // Handle Current
     if (activeToolCallId) {
-      // Sequence check: last message must be assistant with tool calls
+      // Sequence check
       const lastMsg = messages[messages.length - 1];
       const hasCall = lastMsg?.role === 'assistant' && 
                       Array.isArray(lastMsg.content) && 
@@ -99,28 +99,35 @@ export async function POST(req: NextRequest) {
     lastAttemptedMessages = messages;
     console.log("FINAL_AGENT_SEQUENCE:", messages.map(m => `[${m.role}]`));
 
-    const result = streamText({
-      model: google("gemini-3.1-flash-lite-preview"),
-      system: systemInstruction,
-      messages: messages,
-      providerOptions: {
-        google: {
-          thinkingConfig: {
-            thinkingLevel: "medium",
-            includeThoughts: true
+    return createDataStreamResponse({
+      execute: (dataStream) => {
+        const result = streamText({
+          model: google("gemini-3.1-flash-lite-preview"),
+          system: systemInstruction,
+          messages: messages,
+          providerOptions: {
+            google: {
+              thinkingConfig: {
+                thinkingLevel: "medium",
+                includeThoughts: true
+              }
+            }
+          },
+          tools: {
+            request_medical_record: tool({
+              description: "Get medical record",
+              inputSchema: z.object({ record_id: z.string(), reason: z.string() })
+            })
           }
-        }
+        });
+
+        result.mergeIntoDataStream(dataStream);
       },
-      tools: {
-        request_medical_record: tool({
-          description: "Get medical record",
-          inputSchema: z.object({ record_id: z.string(), reason: z.string() })
-        })
+      onError: (error) => {
+        console.error("DATA_STREAM_ERROR:", error);
+        return "Internal server error";
       }
     });
-
-    // In AI SDK 6.0, the recommended way to stream a UI-compatible stream is toUIMessageStreamResponse()
-    return result.toUIMessageStreamResponse();
 
   } catch (error: any) {
     console.error(">>> [CRITICAL] 500 ERROR DETECTED:", error.message);
