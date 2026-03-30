@@ -1,6 +1,5 @@
 package com.example.mychat.network
 
-import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -12,9 +11,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
-import java.io.File
-import java.text.SimpleDateFormat
-import java.util.*
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -28,24 +24,11 @@ sealed class HealEvent {
 
 @Singleton
 class HealNetworkClient @Inject constructor(
-    private val client: OkHttpClient,
-    private val context: Context // We need context for file logging
+    private val client: OkHttpClient
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
-    private fun logToFile(message: String) {
-        try {
-            val logFile = File(context.filesDir, "network_trace.log")
-            val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
-            logFile.appendText("[$ts] $message\n")
-        } catch (e: Exception) {
-            Log.e("HealNetwork", "File logging failed", e)
-        }
-    }
-
     fun streamChat(url: String, requestBody: String, appCheckToken: String?): Flow<HealEvent> = callbackFlow {
-        logToFile(">>> REQUEST: $requestBody")
-        
         val request = Request.Builder()
             .url(url)
             .post(requestBody.toRequestBody("application/json".toMediaType()))
@@ -55,35 +38,36 @@ class HealNetworkClient @Inject constructor(
 
         val listener = object : EventSourceListener() {
             override fun onOpen(eventSource: EventSource, response: Response) {
-                logToFile("<<< SSE OPEN: ${response.code}")
+                if (response.code != 200) {
+                    val body = try { response.peekBody(1024).string() } catch(e: Exception) { "unavailable" }
+                    trySend(HealEvent.Error("Server error ${response.code}"))
+                }
             }
 
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
-                logToFile("<<< SSE EVENT: $data")
                 try {
                     val element = json.parseToJsonElement(data) as? JsonObject ?: return
                     val streamType = element["type"]?.jsonPrimitive?.content ?: return
                     
                     when (streamType) {
-                        "text-delta" -> {
-                            val delta = element["text"]?.jsonPrimitive?.content 
+                        "text-delta", "reasoning-delta" -> {
+                            val content = element["text"]?.jsonPrimitive?.content 
                                 ?: element["delta"]?.jsonPrimitive?.content 
                                 ?: ""
-                            if (delta.isNotEmpty()) trySend(HealEvent.TextDelta(delta))
-                        }
-                        "reasoning-delta" -> {
-                            val delta = element["text"]?.jsonPrimitive?.content 
-                                ?: element["delta"]?.jsonPrimitive?.content 
-                                ?: ""
-                            if (delta.isNotEmpty()) trySend(HealEvent.ReasoningDelta(delta))
+                            if (content.isNotEmpty()) {
+                                if (streamType == "text-delta") trySend(HealEvent.TextDelta(content))
+                                else trySend(HealEvent.ReasoningDelta(content))
+                            }
                         }
                         "tool-call", "tool-input-available" -> {
                             val toolCallId = element["toolCallId"]?.jsonPrimitive?.content ?: ""
                             val toolName = element["toolName"]?.jsonPrimitive?.content ?: ""
+                            val signature = element["providerMetadata"]?.jsonObject
+                                ?.get("google")?.jsonObject?.get("thoughtSignature")?.jsonPrimitive?.content
+                            
                             val args = element["args"]?.jsonObject?.toString() 
-                                ?: element["input"]?.jsonObject?.toString() 
-                                ?: "{}"
-                            trySend(HealEvent.ToolCall(toolCallId, toolName, args))
+                                ?: element["input"]?.jsonObject?.toString() ?: "{}"
+                            trySend(HealEvent.ToolCall(toolCallId, toolName, args + "|||$signature"))
                         }
                         "error" -> {
                             val msg = element["error"]?.jsonPrimitive?.content ?: "Stream error"
@@ -91,20 +75,17 @@ class HealNetworkClient @Inject constructor(
                         }
                     }
                 } catch (e: Exception) {
-                    logToFile("!!! PARSE ERROR: ${e.message}")
+                    Log.e("HealNetwork", "Parse fail", e)
                 }
             }
 
             override fun onClosed(eventSource: EventSource) {
-                logToFile("<<< SSE CLOSED")
                 trySend(HealEvent.StreamEnd)
                 close()
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                val errorBody = try { response?.peekBody(1024)?.string() } catch (e: Exception) { null }
-                logToFile("!!! SSE FAILURE: Code=${response?.code}, Msg=${t?.message}, Body=$errorBody")
-                trySend(HealEvent.Error("Connection Failed (${response?.code}): ${t?.message}"))
+                trySend(HealEvent.Error("Connection Failed: ${t?.message}"))
                 close(t)
             }
         }

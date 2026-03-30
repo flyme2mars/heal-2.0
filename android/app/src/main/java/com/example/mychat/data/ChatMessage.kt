@@ -24,5 +24,6 @@ data class ChatMessage(
 data class ToolCallInfo(
     val toolCallId: String,
     val name: String,
-    val arguments: String
+    val arguments: String,
+    val thoughtSignature: String? = null
 )

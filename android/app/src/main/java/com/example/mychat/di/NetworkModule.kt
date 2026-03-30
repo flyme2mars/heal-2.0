@@ -27,7 +27,7 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideHealNetworkClient(client: OkHttpClient, @ApplicationContext context: Context): HealNetworkClient {
-        return HealNetworkClient(client, context)
+    fun provideHealNetworkClient(client: OkHttpClient): HealNetworkClient {
+        return HealNetworkClient(client)
     }
 }

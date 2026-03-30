@@ -161,20 +161,8 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun logTrace(message: String) {
-        try {
-            val logFile = java.io.File(context.filesDir, "network_trace.log")
-            val timestamp = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.getDefault()).format(java.util.Date())
-            logFile.appendText("[$timestamp] $message\n")
-            Log.d("HealTrace", message)
-        } catch (e: Exception) {
-            Log.e("ChatViewModel", "Logging failed", e)
-        }
-    }
-
     fun sendMessage(userText: String, isHiddenData: Boolean = false, toolCallId: String? = null) {
         if (userText.isBlank() && _uiState.value.selectedImageUri == null) return
-        logTrace("sendMessage: isHidden=$isHiddenData, callId=$toolCallId, text=${userText.take(50)}...")
 
         val sessionId = _uiState.value.activeSessionId ?: return
         val imageUri = _uiState.value.selectedImageUri
@@ -198,7 +186,6 @@ class ChatViewModel @Inject constructor(
                 else -> "user"
             }
             
-            // 1. Persist CURRENT payload
             val messageToPersist = ChatMessageEntity(
                 sessionId = sessionId,
                 role = dbRole,
@@ -239,7 +226,6 @@ class ChatViewModel @Inject constructor(
                 val medicalSummary = medicalRecordManager.getMedicalSummary()
                 val memorySnapshot = documentManager.getMemorySnapshot()
                 
-                // 2. CONSTRUCT HISTORY - strictly exclude current
                 val allHistory = chatDao.getMessagesForSessionList(sessionId)
                 val history = allHistory.filter { it.id != currentMessageDbId }.takeLast(20).map { 
                     val map = mutableMapOf("role" to it.role, "content" to it.content)
@@ -251,8 +237,6 @@ class ChatViewModel @Inject constructor(
                     }
                     map.toMap()
                 }
-
-                Log.d("ChatViewModel", "HISTORY TRACE: ${history.map { it["role"] }}")
 
                 val docMap = uiState.value.documents.joinToString("\n") { 
                     "DOCUMENT [ID: ${it.id}] | Label: ${it.userLabel ?: it.name} | Type: ${it.recordType ?: "Unknown"} | Tags: ${it.tags.joinToString(", ")} | Date: ${it.recordDate ?: "No Date"} | AI Summary: ${it.summary}"
@@ -280,25 +264,27 @@ class ChatViewModel @Inject constructor(
 
                 networkClient.streamChat(backendUrl, requestBody, null).collect { event ->
                     when (event) {
-                        is HealEvent.TextDelta -> {
-                            logTrace("<<< TextDelta: ${event.text.take(20)}...")
-                            appendToMessage(targetId, event.text, true)
-                        }
-                        is HealEvent.ReasoningDelta -> {
-                            logTrace("<<< ReasoningDelta: ${event.text.take(20)}...")
-                            appendToMessage(targetId, null, true, reasoningDelta = event.text)
-                        }
+                        is HealEvent.TextDelta -> appendToMessage(targetId, event.text, true)
+                        is HealEvent.ReasoningDelta -> appendToMessage(targetId, null, true, reasoningDelta = event.text)
                         is HealEvent.ToolCall -> {
-                            logTrace("<<< ToolCall: ${event.name}, id=${event.id}")
-                            currentToolCalls.add(ToolCallInfo(event.id, event.name, event.arguments))
-                            handleToolCall(event, targetId)
+                            val parts = event.arguments.split("|||")
+                            val args = parts[0]
+                            val signature = parts.getOrNull(1)
+                            
+                            val info = ToolCallInfo(event.id, event.name, args, signature)
+                            currentToolCalls.add(info)
+                            
+                            _uiState.update { state ->
+                                val newList = state.messages.toMutableList()
+                                val index = newList.indexOfLast { it.id == targetId }
+                                if (index != -1) {
+                                    newList[index] = newList[index].copy(isPending = false, pendingToolCall = info, toolCallId = event.id)
+                                }
+                                state.copy(messages = newList)
+                            }
                         }
-                        is HealEvent.Error -> {
-                            logTrace("<<< ERROR: ${event.message}")
-                            updateMessage(targetId, "Error: ${event.message}", false, ChatRole.ERROR)
-                        }
+                        is HealEvent.Error -> updateMessage(targetId, "Error: ${event.message}", false, ChatRole.ERROR)
                         is HealEvent.StreamEnd -> {
-                            logTrace("<<< StreamEnd for $targetId")
                             val finalState = _uiState.value.messages.find { it.id == targetId }
                             val finalFullText = finalState?.text ?: ""
                             val finalFullReasoning = finalState?.reasoning ?: ""
@@ -320,18 +306,6 @@ class ChatViewModel @Inject constructor(
                 Log.e("ChatViewModel", "Request failed", e)
                 updateMessage(targetId, "Failed to connect to Heal Agent.", false, ChatRole.ERROR)
             }
-        }
-    }
-
-    private fun handleToolCall(event: HealEvent.ToolCall, messageId: String) {
-        val info = ToolCallInfo(toolCallId = event.id, name = event.name, arguments = event.arguments)
-        _uiState.update { state ->
-            val newList = state.messages.toMutableList()
-            val index = newList.indexOfLast { it.id == messageId }
-            if (index != -1) {
-                newList[index] = newList[index].copy(isPending = false, pendingToolCall = info, toolCallId = event.id)
-            }
-            state.copy(messages = newList)
         }
     }
 
