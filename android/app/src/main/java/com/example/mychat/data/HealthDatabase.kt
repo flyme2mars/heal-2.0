@@ -17,6 +17,8 @@ data class HealthDocumentEntity(
     val type: String, // "pdf", "image", "text"
     val recordType: String? = null, // e.g., "Blood Test", "MRI"
     val recordDate: String? = null, // ISO date string
+    val userLabel: String? = null,
+    val tags: String? = null,
     val internalPath: String,
     val timestamp: Long,
     val summary: String? = null,
@@ -40,6 +42,12 @@ interface HealthDocumentDao {
     @Query("UPDATE health_documents SET summary = :summary, recordType = :recordType, recordDate = :recordDate WHERE id = :id")
     suspend fun updateMetadata(id: String, summary: String, recordType: String?, recordDate: String?)
 
+    @Query("UPDATE health_documents SET tags = :tags WHERE id = :id")
+    suspend fun updateTags(id: String, tags: String)
+
+    @Query("UPDATE health_documents SET userLabel = :label WHERE id = :id")
+    suspend fun updateUserLabel(id: String, label: String)
+
     @Query("UPDATE health_documents SET fullText = :text WHERE id = :id")
     suspend fun updateFullText(id: String, text: String)
 
@@ -47,7 +55,7 @@ interface HealthDocumentDao {
     suspend fun deleteDocument(id: String)
 }
 
-@Database(entities = [HealthDocumentEntity::class], version = 3)
+@Database(entities = [HealthDocumentEntity::class], version = 4)
 abstract class HealthDatabase : RoomDatabase() {
     abstract fun healthDocumentDao(): HealthDocumentDao
 }

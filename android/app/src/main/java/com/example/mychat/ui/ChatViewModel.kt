@@ -125,7 +125,7 @@ class ChatViewModel @Inject constructor(
                 
                 // Agent Context: Only sending Metadata "Map"
                 val docMap = uiState.value.documents.joinToString("\n") { 
-                    "- ID: ${it.id} | ${it.recordType ?: "Unknown"} | ${it.recordDate ?: "No Date"} | Summary: ${it.summary}"
+                    "- ID: ${it.id} | Label: ${it.userLabel ?: it.name} | Type: ${it.recordType ?: "Unknown"} | Tags: ${it.tags.joinToString(", ")} | Date: ${it.recordDate ?: "No Date"} | AI Summary: ${it.summary}"
                 }
 
                 val attachments = mutableListOf<ChatAttachment>()
@@ -288,6 +288,13 @@ class ChatViewModel @Inject constructor(
     fun refreshMedicalSummary() = refreshUserData()
 
     fun deleteDocument(document: HealthDocument) { viewModelScope.launch { documentManager.deleteDocument(document) } }
+    
+    fun updateDocumentLabel(documentId: String, newLabel: String) {
+        viewModelScope.launch {
+            documentManager.updateUserLabel(documentId, newLabel)
+        }
+    }
+
     fun clearChat() { _uiState.update { it.copy(messages = emptyList()) } }
 }
 

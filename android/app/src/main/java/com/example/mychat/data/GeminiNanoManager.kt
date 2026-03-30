@@ -17,13 +17,7 @@ class GeminiNanoManager @Inject constructor(
     suspend fun analyzeMedicalText(text: String): AnalysisResult {
         Log.d("GeminiNano", "Running local LLM inference (Simulated)...")
         
-        // Simulating LLM's multi-dimensional extraction:
-        // 1. Symptom/Main Topic Identification
-        // 2. Clinical Outcome/Diagnosis
-        // 3. Treatment/Plan
-        
         val lowerText = text.lowercase()
-        val lines = text.lines().filter { it.isNotBlank() }
         
         // Heuristic: Topic Scoring
         val scores = mutableMapOf<String, Int>()
@@ -41,18 +35,16 @@ class GeminiNanoManager @Inject constructor(
         for ((topic, keywords) in topics) {
             var score = 0
             for (kw in keywords) {
-                // Higher score for exact matches or multiple occurrences
                 val count = lowerText.split(kw).size - 1
                 if (count > 0) {
                     score += (count * 2).coerceAtMost(10)
-                    // Bonus for keyword in the first 500 characters
                     if (lowerText.take(500).contains(kw)) score += 5
                 }
             }
             scores[topic] = score
         }
 
-        // 1.5. Check for Symptom/Reason for Visit
+        // Check for Symptom/Reason for Visit
         val symptomMarkers = listOf("reason for visit", "chief complaint", "symptoms", "presenting with")
         var detectedSymptom = ""
         for (marker in symptomMarkers) {
@@ -67,7 +59,6 @@ class GeminiNanoManager @Inject constructor(
 
         val primaryTopic = scores.maxByOrNull { it.value }?.let { if (it.value > 0) it.key else null } ?: "Medical Document"
         
-        // Heuristic: Diagnosis/Summary Line Extraction
         val summaryLine = extractSignificantLine(text, lowerText)
         
         val dateRegex = """(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})|([A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4})""".toRegex()
@@ -87,32 +78,52 @@ class GeminiNanoManager @Inject constructor(
         return AnalysisResult(
             summary = finalSummary.replace("""\s+""".toRegex(), " ").trim(),
             type = primaryTopic,
-            date = date
+            date = date,
+            tags = extractTags(primaryTopic, text, lowerText)
         )
+    }
+
+    private fun extractTags(topic: String, text: String, lowerText: String): List<String> {
+        val tags = mutableSetOf<String>()
+        tags.add(topic)
+        
+        val clinicalKeywords = mapOf(
+            "Tachycardia" to listOf("tachycardia", "fast heart"),
+            "Bradycardia" to listOf("bradycardia", "slow heart"),
+            "Arrhythmia" to listOf("arrhythmia", "pac", "pvc", "irregular"),
+            "Ischemia" to listOf("ischemia", "st elevation", "st depression"),
+            "Normal" to listOf("normal sinus", "unremarkable"),
+            "Hypertension" to listOf("hypertension", "high blood pressure"),
+            "Hyperglycemia" to listOf("glucose", "hyperglycemia", "high sugar"),
+            "Anemia" to listOf("anemia", "low hemoglobin", "hgb"),
+            "Inflammation" to listOf("crp", "inflammation", "esr")
+        )
+
+        for ((tag, keywords) in clinicalKeywords) {
+            if (keywords.any { lowerText.contains(it) }) {
+                tags.add(tag)
+            }
+        }
+        
+        return tags.toList()
     }
 
     private fun extractSignificantLine(text: String, lowerText: String): String {
         val lines = text.lines().map { it.trim() }.filter { it.length > 5 }
-        
-        // 1. Noise Filtering: Ignore Administrative Headers
         val noiseKeywords = listOf("patient", "dob", "date of birth", "mrn", "gender", "sex", "age", "address", "physician", "provider", "facility", "location", "collected", "received", "reported")
         val clinicalLines = lines.filter { line ->
             val lowerLine = line.lowercase()
             !noiseKeywords.any { noise -> lowerLine.startsWith(noise) || (lowerLine.contains(noise) && lowerLine.contains(":")) }
         }
 
-        // Priority 1: High-Signal Sections (Diagnosis, Impression, Plan)
         val sectionMarkers = listOf("diagnosis", "impression", "assessment", "conclusion", "clinical finding", "plan", "results", "history of present illness")
         for (marker in sectionMarkers) {
             val markerIndex = clinicalLines.indexOfFirst { it.lowercase().contains("$marker:") }
             if (markerIndex != -1) {
                 val line = clinicalLines[markerIndex]
                 val content = line.substringAfter(":").trim()
-                
-                // If the content is on the same line and long enough, use it
                 if (content.length > 10) return "$marker: $content"
                 
-                // If content is short or empty, check the next few lines for a paragraph
                 val paragraph = StringBuilder()
                 var j = markerIndex + 1
                 while (j < clinicalLines.size && j < markerIndex + 4) {
@@ -125,17 +136,14 @@ class GeminiNanoManager @Inject constructor(
             }
         }
         
-        // Priority 2: Symptom-specific phrases
         val symptoms = listOf("chest pain", "tightness", "shortness of breath", "palpitations", "dizziness", "cough", "fever", "pain", "nausea")
         for (s in symptoms) {
             val symptomLine = clinicalLines.find { it.lowercase().contains(s) }
             if (symptomLine != null && symptomLine.length > 20) return symptomLine
         }
 
-        // Priority 3: First "Real" Sentence of Clinical Note
-        // Skip common headers and find the first line that looks like a sentence (ends with period or > 40 chars)
         return clinicalLines.firstOrNull { it.length > 40 || it.endsWith(".") } ?: clinicalLines.firstOrNull { it.length > 20 } ?: "Summary of medical record."
     }
 
-    data class AnalysisResult(val summary: String, val type: String, val date: String?)
+    data class AnalysisResult(val summary: String, val type: String, val date: String?, val tags: List<String>)
 }

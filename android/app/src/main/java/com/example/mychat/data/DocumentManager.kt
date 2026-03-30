@@ -17,6 +17,8 @@ data class HealthDocument(
     val type: String, // "pdf" or "image"
     val recordType: String? = null,
     val recordDate: String? = null,
+    val userLabel: String? = null,
+    val tags: List<String> = emptyList(),
     val internalPath: String,
     val timestamp: Long = System.currentTimeMillis(),
     val summary: String? = null,
@@ -58,7 +60,8 @@ class DocumentManager @Inject constructor(
                 type = if (extension.lowercase() == "pdf") "pdf" else "image",
                 internalPath = internalName,
                 timestamp = System.currentTimeMillis(),
-                summary = "Processing indexing..."
+                summary = "Processing indexing...",
+                userLabel = originalName // Default to original name
             )
             
             healthDocumentDao.insertDocument(docEntity)
@@ -69,6 +72,7 @@ class DocumentManager @Inject constructor(
                 type = docEntity.type, 
                 recordType = docEntity.recordType, 
                 recordDate = docEntity.recordDate, 
+                userLabel = docEntity.userLabel,
                 internalPath = docEntity.internalPath, 
                 timestamp = docEntity.timestamp, 
                 summary = docEntity.summary
@@ -87,6 +91,8 @@ class DocumentManager @Inject constructor(
                 type = entity.type,
                 recordType = entity.recordType,
                 recordDate = entity.recordDate,
+                userLabel = entity.userLabel,
+                tags = entity.tags?.split(",")?.filter { it.isNotBlank() } ?: emptyList(),
                 internalPath = entity.internalPath,
                 timestamp = entity.timestamp,
                 summary = entity.summary,
@@ -95,8 +101,15 @@ class DocumentManager @Inject constructor(
         }
     }
 
-    suspend fun updateMetadata(id: String, summary: String, recordType: String?, recordDate: String?) {
+    suspend fun updateMetadata(id: String, summary: String, recordType: String?, recordDate: String?, tags: List<String>? = null) {
         healthDocumentDao.updateMetadata(id, summary, recordType, recordDate)
+        if (tags != null) {
+            healthDocumentDao.updateTags(id, tags.joinToString(","))
+        }
+    }
+
+    suspend fun updateUserLabel(id: String, label: String) {
+        healthDocumentDao.updateUserLabel(id, label)
     }
 
     suspend fun updateFullText(id: String, text: String) {

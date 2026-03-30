@@ -42,7 +42,8 @@ class LocalIndexer @Inject constructor(
                 document.id, 
                 analysis.summary, 
                 analysis.type, 
-                analysis.date
+                analysis.date,
+                analysis.tags
             )
             
             Log.d("LocalIndexer", "Indexing complete for ${document.name}")

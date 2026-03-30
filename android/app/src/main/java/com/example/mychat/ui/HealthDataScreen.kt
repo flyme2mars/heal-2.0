@@ -43,12 +43,14 @@ fun HealthDataScreen(
     var nameInput by remember { mutableStateOf("") }
     var weightInput by remember { mutableStateOf("") }
     var selectedDocument by remember { mutableStateOf<com.example.mychat.data.HealthDocument?>(null) }
+    var isRenaming by remember { mutableStateOf(false) }
+    var labelInput by remember { mutableStateOf("") }
 
     // Detail Dialog
     if (selectedDocument != null) {
         val doc = selectedDocument!!
         androidx.compose.ui.window.Dialog(
-            onDismissRequest = { selectedDocument = null },
+            onDismissRequest = { selectedDocument = null; isRenaming = false },
             properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
         ) {
             Surface(
@@ -69,20 +71,50 @@ fun HealthDataScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            doc.name,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { selectedDocument = null }) {
+                        if (isRenaming) {
+                            OutlinedTextField(
+                                value = labelInput,
+                                onValueChange = { labelInput = it },
+                                modifier = Modifier.weight(1f),
+                                label = { Text("Record Label") },
+                                trailingIcon = {
+                                    IconButton(onClick = { 
+                                        viewModel.updateDocumentLabel(doc.id, labelInput)
+                                        isRenaming = false 
+                                        selectedDocument = doc.copy(userLabel = labelInput)
+                                    }) {
+                                        Icon(Icons.Default.Check, null)
+                                    }
+                                }
+                            )
+                        } else {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    doc.userLabel ?: doc.name,
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "Original: ${doc.name}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            IconButton(onClick = { 
+                                labelInput = doc.userLabel ?: doc.name
+                                isRenaming = true 
+                            }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Rename", modifier = Modifier.size(20.dp))
+                            }
+                        }
+                        IconButton(onClick = { selectedDocument = null; isRenaming = false }) {
                             Icon(Icons.Default.Close, contentDescription = "Close")
                         }
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
                     
-                    Row(modifier = Modifier.fillMaxWidth()) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         AssistChip(
                             onClick = { },
                             label = { Text(doc.recordType ?: "General") },
@@ -94,6 +126,20 @@ fun HealthDataScreen(
                             label = { Text(doc.recordDate ?: "No Date") },
                             leadingIcon = { Icon(Icons.Default.Event, null, Modifier.size(18.dp)) }
                         )
+                    }
+                    
+                    if (doc.tags.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            doc.tags.forEach { tag ->
+                                SuggestionChip(
+                                    onClick = { },
+                                    label = { Text(tag, style = MaterialTheme.typography.labelSmall) }
+                                )
+                            }
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(24.dp))
@@ -318,15 +364,31 @@ fun HealthDataScreen(
             } else {
                 items(uiState.documents) { doc ->
                     ListItem(
-                        headlineContent = { Text(doc.name, fontWeight = FontWeight.SemiBold) },
+                        headlineContent = { Text(doc.userLabel ?: doc.name, fontWeight = FontWeight.SemiBold) },
                         supportingContent = { 
                             Column {
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    doc.tags.take(2).forEach { tag ->
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                tag, 
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                                            )
+                                        }
+                                    }
+                                }
                                 doc.summary?.let { 
                                     Text(
                                         it, 
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.primary,
-                                        maxLines = 2
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                     ) 
                                 }
                                 Text(
