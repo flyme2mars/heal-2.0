@@ -46,36 +46,33 @@ export async function POST(req: NextRequest) {
       try {
         if (role === 'assistant') {
           const rawToolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
-          const content: any[] = [];
           
-          if (msg.content) {
-            content.push({ type: 'text', text: msg.content });
-          }
-          
-          if (rawToolCalls && Array.isArray(rawToolCalls)) {
+          if (rawToolCalls && Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
+            const parts: any[] = [];
+            if (msg.content) parts.push({ type: 'text', text: msg.content });
+            
             rawToolCalls.forEach((tc: any) => {
-              content.push({
+              parts.push({
                 type: 'tool-call',
                 toolCallId: tc.toolCallId,
                 toolName: tc.name,
                 args: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : tc.arguments
               });
             });
+            
+            messages.push({ role: 'assistant', content: parts });
+          } else {
+            messages.push({ role: 'assistant', content: msg.content || "" });
           }
-
-          messages.push({
-            role: 'assistant',
-            content: content.length > 0 ? content : "" // AI SDK allows string or part array
-          });
         } else if (role === 'tool') {
           messages.push({
             role: 'tool',
             content: [
               {
                 type: 'tool-result',
-                toolCallId: msg.toolCallId,
+                toolCallId: msg.toolCallId || "missing-id",
                 toolName: 'request_medical_record',
-                result: msg.content // Simplified result for history
+                result: msg.content 
               }
             ]
           });
@@ -124,21 +121,35 @@ export async function POST(req: NextRequest) {
           }
         ]
       });
-    } else {
-      // Regular User message
+      
+      // User synthetic prompt to trigger synthesis
       messages.push({
         role: 'user',
-        content: [
-          { type: 'text', text: prompt || "Please analyze my health status." },
-          ...(attachments || []).map(att => ({
-            type: 'image' as const,
-            image: att.url,
-          }))
-        ]
+        content: "Please synthesize the information from the record I just provided and answer my previous question."
       });
+    } else {
+      // Regular User message
+      if (attachments && attachments.length > 0) {
+        messages.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt || "Please analyze my health status." },
+            ...attachments.map(att => ({
+              type: 'image' as const,
+              image: att.url,
+            }))
+          ]
+        });
+      } else {
+        messages.push({
+          role: 'user',
+          content: prompt || "Please analyze my health status."
+        });
+      }
     }
 
-    console.log("FINAL_TRACE:", messages.map(m => `[${m.role}] ${Array.isArray(m.content) ? m.content.map(p=>p.type).join(',') : 'str'}`));
+    // Log for debugging
+    console.log("FINAL_TRACE:", messages.map(m => `[${m.role}] ${Array.isArray(m.content) ? m.content.map((p: any) => p.type).join(',') : 'str'}`));
 
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
