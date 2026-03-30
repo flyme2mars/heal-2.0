@@ -227,26 +227,20 @@ class ChatViewModel @Inject constructor(
                 val medicalSummary = medicalRecordManager.getMedicalSummary()
                 val memorySnapshot = documentManager.getMemorySnapshot()
                 
-                // 2. CONSTRUCT HISTORY - strictly excludes the message we just inserted
+                // 2. CONSTRUCT HISTORY - strictly exclude current
                 val allHistory = chatDao.getMessagesForSessionList(sessionId)
                 val history = allHistory.filter { it.id != currentMessageDbId }.takeLast(20).map { 
                     val map = mutableMapOf("role" to it.role, "content" to it.content)
-                    
-                    // CRITICAL: For Assistant messages, toolCalls metadata MUST be included 
-                    // otherwise the sequence [Assistant(Call) -> Tool(Result)] is broken.
                     if (it.role.lowercase() == "assistant" && !it.toolCallsJson.isNullOrBlank()) {
                         map["toolCalls"] = it.toolCallsJson
                     }
-                    
-                    // For existing Tool results in history
                     if (it.role.lowercase() == "tool" && !it.toolCallId.isNullOrBlank()) {
                         map["toolCallId"] = it.toolCallId
                     }
-                    
                     map.toMap()
                 }
 
-                Log.d("ChatViewModel", "HISTORY TRACE: ${history.map { "${it["role"]}(hasCalls=${it.containsKey("toolCalls")})" }}")
+                Log.d("ChatViewModel", "HISTORY TRACE: ${history.map { it["role"] }}")
 
                 val docMap = uiState.value.documents.joinToString("\n") { 
                     "DOCUMENT [ID: ${it.id}] | Label: ${it.userLabel ?: it.name} | Type: ${it.recordType ?: "Unknown"} | Tags: ${it.tags.joinToString(", ")} | Date: ${it.recordDate ?: "No Date"} | AI Summary: ${it.summary}"
@@ -322,12 +316,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             val doc = uiState.value.documents.find { it.id == requestId } ?: return@launch
             val fullText = doc.fullText ?: documentManager.readDocumentText(doc.name)
-            
-            val activeMessage = _uiState.value.messages.find { it.id == messageId }
-            val callId = activeMessage?.pendingToolCall?.toolCallId
-            
-            Log.d("ChatViewModel", "APPROVING: doc=$requestId, msgId=$messageId, foundCallId=$callId")
-            
+            val callId = _uiState.value.messages.find { it.id == messageId }?.pendingToolCall?.toolCallId
             appendToMessage(messageId, "\n\n---\n", true)
             sendMessage(userText = fullText, isHiddenData = true, toolCallId = callId)
         }

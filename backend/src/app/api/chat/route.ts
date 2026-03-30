@@ -45,95 +45,100 @@ export async function POST(req: NextRequest) {
       
       try {
         if (role === 'assistant') {
-          const toolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
+          const rawToolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
+          const content: any[] = [];
+          
+          if (msg.content) {
+            content.push({ type: 'text', text: msg.content });
+          }
+          
+          if (rawToolCalls && Array.isArray(rawToolCalls)) {
+            rawToolCalls.forEach((tc: any) => {
+              content.push({
+                type: 'tool-call',
+                toolCallId: tc.toolCallId,
+                toolName: tc.name,
+                args: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : tc.arguments
+              });
+            });
+          }
+
           messages.push({
-            role: 'assistant' as const,
-            content: msg.content || "", 
-            toolCalls: toolCalls?.map((tc: any) => ({
-              type: 'function',
-              id: tc.toolCallId,
-              function: {
-                name: tc.name,
-                arguments: tc.arguments
-              }
-            }))
+            role: 'assistant',
+            content: content.length > 0 ? content : "" // AI SDK allows string or part array
           });
         } else if (role === 'tool') {
           messages.push({
-            role: 'tool' as const,
+            role: 'tool',
             content: [
               {
                 type: 'tool-result',
                 toolCallId: msg.toolCallId,
                 toolName: 'request_medical_record',
-                result: msg.content
+                result: msg.content // Simplified result for history
               }
             ]
           });
         } else if (role === 'system') {
-          messages.push({ role: 'system' as const, content: msg.content });
+          messages.push({ role: 'system', content: msg.content });
         } else {
-          messages.push({ role: 'user' as const, content: msg.content });
+          messages.push({ role: 'user', content: msg.content });
         }
       } catch (e) {
         console.error(`Error parsing history message at index ${idx}:`, e);
       }
     });
 
-    // CRITICAL FIX: If we have an active tool result, we MUST ensure 
-    // the history ended with an assistant tool call for that ID.
+    // Handle Current Message (Tool Result or User Prompt)
     if (activeToolCallId) {
+      // Sequence check: last message must be assistant with tool calls
       const lastMsg = messages[messages.length - 1];
-      const alreadyHasCall = lastMsg?.role === 'assistant' && 
-                             lastMsg.toolCalls?.some((tc: any) => tc.id === activeToolCallId);
+      const hasCall = lastMsg?.role === 'assistant' && 
+                      Array.isArray(lastMsg.content) && 
+                      lastMsg.content.some((p: any) => p.type === 'tool-call' && p.toolCallId === activeToolCallId);
 
-      if (!alreadyHasCall) {
-        console.warn(`Sequence Violation Detected: Injecting missing assistant call for ${activeToolCallId}`);
+      if (!hasCall) {
+        console.warn(`[FIX] Sequence repair: Injecting missing assistant call for ${activeToolCallId}`);
         messages.push({
-          role: 'assistant' as const,
-          content: "Accessing clinical data...",
-          toolCalls: [{
-            type: 'function',
-            id: activeToolCallId,
-            function: {
-              name: 'request_medical_record',
-              arguments: JSON.stringify({ record_id: "auto-injected" })
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: activeToolCallId,
+              toolName: 'request_medical_record',
+              args: { record_id: "auto-repair" }
             }
-          }]
+          ]
         });
       }
 
+      // Add the Tool Result
       messages.push({
-        role: "tool" as const,
+        role: 'tool',
         content: [
           {
-            type: "tool-result",
+            type: 'tool-result',
             toolCallId: activeToolCallId,
-            toolName: "request_medical_record",
-            result: `[SYSTEM MEMORY UPDATE: Full text of requested clinical record follows]\n\n${prompt}`
+            toolName: 'request_medical_record',
+            result: `[CLINICAL DATA INJECTED]\n\n${prompt}`
           }
         ]
       });
-      
-      messages.push({
-        role: "user" as const,
-        content: "Please synthesize the information from the record I just provided and answer my previous question."
-      });
     } else {
-      // Normal User Message
+      // Regular User message
       messages.push({
-        role: "user" as const,
+        role: 'user',
         content: [
-          { type: "text", text: prompt || "Please analyze my health status." },
+          { type: 'text', text: prompt || "Please analyze my health status." },
           ...(attachments || []).map(att => ({
-            type: "image" as const,
+            type: 'image' as const,
             image: att.url,
           }))
         ]
       });
     }
 
-    console.log("FINAL_AGENT_SEQUENCE:", messages.map(m => `[${m.role}] ${m.toolCalls ? 'Calls:' + m.toolCalls.length : ''}`));
+    console.log("FINAL_TRACE:", messages.map(m => `[${m.role}] ${Array.isArray(m.content) ? m.content.map(p=>p.type).join(',') : 'str'}`));
 
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
@@ -176,7 +181,7 @@ export async function POST(req: NextRequest) {
     console.error("CRITICAL BACKEND ERROR:", error.stack || error.message);
     return NextResponse.json({ 
       error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      stack: error.stack
     }, { status: 500 });
   }
 }
