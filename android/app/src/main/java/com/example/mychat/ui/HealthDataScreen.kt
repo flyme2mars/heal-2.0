@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -41,6 +42,107 @@ fun HealthDataScreen(
     var isEditing by remember { mutableStateOf(false) }
     var nameInput by remember { mutableStateOf("") }
     var weightInput by remember { mutableStateOf("") }
+    var selectedDocument by remember { mutableStateOf<com.example.mychat.data.HealthDocument?>(null) }
+
+    // Detail Dialog
+    if (selectedDocument != null) {
+        val doc = selectedDocument!!
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { selectedDocument = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(24.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            doc.name,
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { selectedDocument = null }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        AssistChip(
+                            onClick = { },
+                            label = { Text(doc.recordType ?: "General") },
+                            leadingIcon = { Icon(Icons.Default.Category, null, Modifier.size(18.dp)) }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        AssistChip(
+                            onClick = { },
+                            label = { Text(doc.recordDate ?: "No Date") },
+                            leadingIcon = { Icon(Icons.Default.Event, null, Modifier.size(18.dp)) }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+                    
+                    Text("AI Analysis Summary", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(
+                        doc.summary ?: "No summary available.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text("Extracted Content", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                            .padding(12.dp)
+                    ) {
+                        LazyColumn {
+                            item {
+                                Text(
+                                    doc.fullText ?: "Full text not available or still processing.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    lineHeight = 20.sp
+                                )
+                            }
+                        }
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Button(
+                        onClick = { selectedDocument = null },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Text("Done")
+                    }
+                }
+            }
+        }
+    }
 
     // Sync inputs with state when not editing
     LaunchedEffect(uiState.userName, uiState.userWeight, isEditing) {
@@ -246,7 +348,9 @@ fun HealthDataScreen(
                         colors = ListItemDefaults.colors(
                             containerColor = Color.Transparent
                         ),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedDocument = doc }
                     )
                 }
             }

@@ -29,23 +29,43 @@ class GeminiNanoManager @Inject constructor(
         val scores = mutableMapOf<String, Int>()
         
         val topics = mapOf(
-            "Cardiac" to listOf("heart", "chest", "cardiac", "ekg", "ecg", "troponin", "tightness", "palpitation"),
-            "Respiratory" to listOf("lung", "breathing", "cough", "breath", "oxygen", "pneumonia", "asthma"),
-            "Metabolic" to listOf("blood glucose", "a1c", "diabetes", "insulin", "cholesterol", "lipid", "triglyceride"),
-            "Infectious" to listOf("fever", "infection", "antibiotic", "wbc", "bacteria", "viral"),
-            "Neurological" to listOf("brain", "stroke", "headache", "mri", "neurology", "seizure"),
-            "Musculoskeletal" to listOf("bone", "fracture", "pain", "injury", "trauma")
+            "Cardiac" to listOf("heart", "chest", "cardiac", "ekg", "ecg", "troponin", "tightness", "palpitation", "atrial", "ventricular", "myocardial"),
+            "Respiratory" to listOf("lung", "breathing", "cough", "breath", "oxygen", "pneumonia", "asthma", "bronchial", "respiratory"),
+            "Metabolic" to listOf("blood glucose", "a1c", "diabetes", "insulin", "hba1c", "metabolic"),
+            "Lipids" to listOf("cholesterol", "lipid", "triglyceride", "hdl", "ldl"),
+            "Infectious" to listOf("fever", "infection", "antibiotic", "wbc", "bacteria", "viral", "sepsis"),
+            "Neurological" to listOf("brain", "stroke", "headache", "mri", "neurology", "seizure", "cranial"),
+            "Musculoskeletal" to listOf("bone", "fracture", "pain", "injury", "trauma", "joint", "muscle")
         )
 
         for ((topic, keywords) in topics) {
             var score = 0
             for (kw in keywords) {
-                if (lowerText.contains(kw)) score += 1
+                // Higher score for exact matches or multiple occurrences
+                val count = lowerText.split(kw).size - 1
+                if (count > 0) {
+                    score += (count * 2).coerceAtMost(10)
+                    // Bonus for keyword in the first 500 characters
+                    if (lowerText.take(500).contains(kw)) score += 5
+                }
             }
             scores[topic] = score
         }
 
-        val primaryTopic = scores.maxByOrNull { it.value }?.key ?: "General Medical"
+        // 1.5. Check for Symptom/Reason for Visit
+        val symptomMarkers = listOf("reason for visit", "chief complaint", "symptoms", "presenting with")
+        var detectedSymptom = ""
+        for (marker in symptomMarkers) {
+            val index = lowerText.indexOf(marker)
+            if (index != -1) {
+                val start = index + marker.length
+                val end = (start + 100).coerceAtMost(text.length)
+                detectedSymptom = text.substring(start, end).split("\n", ".").firstOrNull { it.isNotBlank() }?.replace(":", "")?.trim() ?: ""
+                if (detectedSymptom.isNotEmpty()) break
+            }
+        }
+
+        val primaryTopic = scores.maxByOrNull { it.value }?.let { if (it.value > 0) it.key else null } ?: "Medical Document"
         
         // Heuristic: Diagnosis/Summary Line Extraction
         val summaryLine = extractSignificantLine(text, lowerText)
@@ -54,15 +74,18 @@ class GeminiNanoManager @Inject constructor(
         val date = dateRegex.find(text)?.value
         
         val finalSummary = when {
-            primaryTopic == "Cardiac" && lowerText.contains("chest") -> {
-                "Cardiac evaluation regarding chest symptoms and findings."
+            detectedSymptom.isNotEmpty() && summaryLine.contains("Diagnosis", ignoreCase = true) -> {
+                "Presented with $detectedSymptom. $summaryLine"
             }
-            summaryLine.length > 20 -> summaryLine
+            detectedSymptom.isNotEmpty() -> {
+                "Medical evaluation for $detectedSymptom."
+            }
+            summaryLine.length > 30 -> summaryLine
             else -> "Medical record regarding $primaryTopic findings."
         }
 
         return AnalysisResult(
-            summary = finalSummary,
+            summary = finalSummary.replace("""\s+""".toRegex(), " ").trim(),
             type = primaryTopic,
             date = date
         )
@@ -70,27 +93,33 @@ class GeminiNanoManager @Inject constructor(
 
     private fun extractSignificantLine(text: String, lowerText: String): String {
         // Find lines containing diagnosis or findings
-        val lines = text.lines().filter { it.trim().length > 10 }
+        val lines = text.lines().map { it.trim() }.filter { it.length > 10 }
         
         // Priority 1: "Diagnosis:" or "Impression:"
-        val diagnosisMarkers = listOf("diagnosis", "impression", "assessment", "conclusion", "plan")
+        val diagnosisMarkers = listOf("diagnosis", "impression", "assessment", "conclusion", "clinical finding", "plan")
         for (marker in diagnosisMarkers) {
             val markerLine = lines.find { it.lowercase().contains("$marker:") }
             if (markerLine != null) {
-                return markerLine.substringAfter(":").trim()
+                val content = markerLine.substringAfter(":").trim()
+                if (content.length > 5) return "$marker: $content"
             }
-            val afterMarker = lines.find { it.lowercase().startsWith(marker) }
-            if (afterMarker != null) return afterMarker.trim()
+            
+            // Check the line immediately AFTER the marker if the marker is on its own line
+            val exactMarkerIndex = lines.indexOfFirst { it.lowercase() == marker || it.lowercase() == "$marker:" }
+            if (exactMarkerIndex != -1 && exactMarkerIndex < lines.size - 1) {
+                val nextLine = lines[exactMarkerIndex + 1]
+                if (nextLine.length > 10) return "$marker: $nextLine"
+            }
         }
         
         // Priority 2: Mention of symptoms or main findings
-        val symptoms = listOf("pain", "tightness", "shortness", "fever", "nausea", "dizziness")
+        val symptoms = listOf("chest pain", "tightness", "shortness of breath", "palpitations", "dizziness")
         for (s in symptoms) {
             val symptomLine = lines.find { it.lowercase().contains(s) }
-            if (symptomLine != null) return symptomLine.trim()
+            if (symptomLine != null) return symptomLine
         }
 
-        return lines.firstOrNull() ?: "Summary of medical record."
+        return lines.firstOrNull { it.length > 20 } ?: "Summary of medical record."
     }
 
     data class AnalysisResult(val summary: String, val type: String, val date: String?)
