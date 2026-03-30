@@ -7,7 +7,6 @@ import { ChatRequest } from "@/types/chat";
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  let lastAttemptedMessages: any[] = [];
   try {
     const rawBody = await req.text();
     const body: ChatRequest = JSON.parse(rawBody);
@@ -15,29 +14,46 @@ export async function POST(req: NextRequest) {
 
     const vaultIndex = context.fhir_records?.find(r => r.startsWith("LOCAL VAULT INDEX:")) || "No records in vault.";
 
-    const systemInstruction = `You are Heal 2.0. Clinical AI. Vault Index: ${vaultIndex}`;
+    const systemInstruction = `
+      You are Heal 2.0, a clinical AI agent. 
+      INDEX: ${vaultIndex}
+      AGENTIC WORKFLOW:
+      1. Use 'request_medical_record' for data access.
+      2. Synthesize results immediately.
+    `;
 
-    const messages: any[] = [];
+    const messages: ModelMessage[] = [];
 
-    // Map history
+    // Map history with DEFINITIVE 6.0 schema
     (history || []).forEach((msg, idx) => {
       const role = msg.role.toLowerCase();
       try {
         if (role === 'assistant') {
           const rawToolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
+          
           if (rawToolCalls && Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
             const parts: any[] = [];
-            if (msg.content) parts.push({ type: 'text', text: msg.content });
+            if (msg.content && msg.content.trim().length > 0) {
+              parts.push({ type: 'text', text: msg.content });
+            }
+            
             rawToolCalls.forEach((tc: any) => {
               parts.push({
                 type: 'tool-call',
                 toolCallId: tc.toolCallId,
                 toolName: tc.name,
-                // Check if version 6.0 needs 'args' or 'input'
-                args: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : tc.arguments
+                input: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : tc.arguments
               });
             });
-            messages.push({ role: 'assistant', content: parts });
+            
+            const firstCall = rawToolCalls[0];
+            const signature = firstCall?.thoughtSignature;
+
+            messages.push({ 
+              role: 'assistant', 
+              content: parts,
+              ...(signature ? { providerMetadata: { google: { thoughtSignature: signature } } } : {})
+            } as any);
           } else {
             messages.push({ role: 'assistant', content: msg.content || " " });
           }
@@ -49,12 +65,14 @@ export async function POST(req: NextRequest) {
                 type: 'tool-result',
                 toolCallId: msg.toolCallId || "unknown",
                 toolName: 'request_medical_record',
-                result: msg.content // Trying 'result' again as some 6.0 versions expect this
+                output: { type: 'text', value: msg.content } // Correct 6.0 schema
               }
             ]
           });
+        } else if (role === 'system') {
+          messages.push({ role: 'system', content: msg.content });
         } else {
-          messages.push({ role: role === 'system' ? 'system' : 'user', content: msg.content });
+          messages.push({ role: 'user', content: msg.content });
         }
       } catch (e) {
         console.error(`History error at ${idx}:`, e);
@@ -63,71 +81,69 @@ export async function POST(req: NextRequest) {
 
     // Handle Current
     if (activeToolCallId) {
-      // Ensure matching call exists in messages
-      const last = messages[messages.length - 1];
-      const hasCall = last?.role === 'assistant' && 
-                      Array.isArray(last.content) && 
-                      last.content.some((p: any) => p.type === 'tool-call' && p.toolCallId === activeToolCallId);
-
-      if (!hasCall) {
-        messages.push({
-          role: 'assistant',
-          content: [{ 
-            type: 'tool-call', 
-            toolCallId: activeToolCallId, 
-            toolName: 'request_medical_record', 
-            args: { record_id: "repair" } 
-          }]
-        });
-      }
+      // Find the signature from the history to match the current tool-result
+      const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+      const signature = (lastAssistant as any)?.providerMetadata?.google?.thoughtSignature;
 
       messages.push({
         role: 'tool',
-        content: [{
-          type: 'tool-result',
-          toolCallId: activeToolCallId,
-          toolName: 'request_medical_record',
-          result: `[DATA]: ${prompt}`
-        }]
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: activeToolCallId,
+            toolName: 'request_medical_record',
+            output: { type: 'text', value: `[AUTHORIZED]:\n\n${prompt}` }
+          }
+        ]
       });
-    } else {
+
       messages.push({
         role: 'user',
-        content: prompt || "Analyze status."
+        content: "Please analyze the record AUTHORIZED above and answer my question."
       });
+    } else {
+      if (attachments && attachments.length > 0) {
+        messages.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt || "Analyze my status." },
+            ...attachments.map(a => ({ type: 'image' as const, image: a.url }))
+          ]
+        });
+      } else {
+        messages.push({ role: 'user', content: prompt || "Analyze my status." });
+      }
     }
 
-    lastAttemptedMessages = messages;
+    console.log("FINAL_TRACE:", JSON.stringify(messages.map(m => ({ 
+      role: m.role, 
+      parts: Array.isArray(m.content) ? m.content.map(p => p.type) : 'str' 
+    })), null, 2));
 
-    // THE ACTUAL INVESTIGATION: 
-    // We will call streamText but catch the specific error to find the missing field.
-    try {
-      const result = streamText({
-        model: google("gemini-3.1-flash-lite-preview"),
-        system: systemInstruction,
-        messages: messages,
-        tools: {
-          request_medical_record: tool({
-            description: "Get record",
-            inputSchema: z.object({ record_id: z.string(), reason: z.string() })
-          })
+    const result = streamText({
+      model: google("gemini-3.1-flash-lite-preview"),
+      system: systemInstruction,
+      messages: messages,
+      providerOptions: {
+        google: {
+          thinkingConfig: {
+            thinkingLevel: "medium",
+            includeThoughts: true
+          }
         }
-      });
+      },
+      tools: {
+        request_medical_record: tool({
+          description: "Get medical record",
+          inputSchema: z.object({ record_id: z.string(), reason: z.string() })
+        })
+      }
+    });
 
-      return (result as any).toUIMessageStreamResponse();
-    } catch (streamError: any) {
-      console.error(">>> [INVESTIGATION] STREAM_TEXT REJECTED PROMPT");
-      console.error(">>> ERROR:", streamError.message);
-      // Return the error details to Android so we can read it in the logs
-      return NextResponse.json({ 
-        error: "INVESTIGATION_FAILED", 
-        detail: streamError.message,
-        messages_sent: messages.map(m => ({ role: m.role, contentIsArray: Array.isArray(m.content) }))
-      }, { status: 400 });
-    }
+    return (result as any).toUIMessageStreamResponse();
 
   } catch (error: any) {
-    console.error("CRITICAL ERROR:", error.message);
+    console.error("AGENT ERROR:", error.message);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
