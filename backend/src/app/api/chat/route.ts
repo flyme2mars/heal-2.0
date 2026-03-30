@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
           for await (const part of result.fullStream) {
             if (part.type === 'text-delta') {
               controller.enqueue(encoder.encode(`data: 0:${JSON.stringify(part.text)}\n\n`));
-            } else if (part.type === 'reasoning') {
+            } else if (part.type === 'reasoning-delta') {
               controller.enqueue(encoder.encode(`data: r:${JSON.stringify(part.text)}\n\n`));
             } else if (part.type === 'tool-call') {
               console.log("AI requested tool:", part.toolName);
