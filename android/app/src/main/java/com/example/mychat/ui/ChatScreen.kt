@@ -330,22 +330,30 @@ fun MessageBubble(
                             }
                             
                             if (message.isActionResolved && message.isPending) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(top = 12.dp).fillMaxWidth().background(contentColor.copy(alpha = 0.05f), RoundedCornerShape(8.dp)).padding(8.dp)
+                                Column(
+                                    modifier = Modifier.padding(top = 12.dp).fillMaxWidth().background(contentColor.copy(alpha = 0.05f), RoundedCornerShape(12.dp)).padding(12.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    Icon(
-                                        Icons.Default.AutoAwesome, 
-                                        null, 
-                                        Modifier.size(16.dp), 
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        "Data ingested, synthesizing...", 
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = contentColor.copy(alpha = 0.7f),
-                                        fontWeight = FontWeight.Bold
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Default.AutoAwesome, 
+                                            null, 
+                                            Modifier.size(18.dp), 
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            "Analyzing clinical data...", 
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = contentColor.copy(alpha = 0.8f),
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                    LinearProgressIndicator(
+                                        modifier = Modifier.fillMaxWidth().height(2.dp).clip(CircleShape),
+                                        color = MaterialTheme.colorScheme.primary,
+                                        trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
                                     )
                                 }
                             }

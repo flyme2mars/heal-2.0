@@ -263,9 +263,8 @@ class ChatViewModel @Inject constructor(
                 val json = Json { ignoreUnknownKeys = true }
                 val requestBody = json.encodeToString(request)
                 
-                var currentMessageState = _uiState.value.messages.find { it.id == targetId }
-                var fullResponseText = if (isHiddenData) currentMessageState?.text ?: "" else ""
-                var fullReasoningText = if (isHiddenData) currentMessageState?.reasoning ?: "" else ""
+                var fullResponseText = ""
+                var fullReasoningText = ""
                 var lastUpdateTime = System.currentTimeMillis()
                 
                 // Track tool calls for final persistence
@@ -276,14 +275,14 @@ class ChatViewModel @Inject constructor(
                         is HealEvent.TextDelta -> {
                             fullResponseText += event.text
                             if (System.currentTimeMillis() - lastUpdateTime > 50) {
-                                updateMessage(targetId, fullResponseText, true, reasoning = fullReasoningText)
+                                appendToMessage(targetId, event.text, true, reasoningDelta = null)
                                 lastUpdateTime = System.currentTimeMillis()
                             }
                         }
                         is HealEvent.ReasoningDelta -> {
                             fullReasoningText += event.text
                             if (System.currentTimeMillis() - lastUpdateTime > 50) {
-                                updateMessage(targetId, fullResponseText, true, reasoning = fullReasoningText)
+                                appendToMessage(targetId, null, true, reasoningDelta = event.text)
                                 lastUpdateTime = System.currentTimeMillis()
                             }
                         }
@@ -294,7 +293,12 @@ class ChatViewModel @Inject constructor(
                         }
                         is HealEvent.Error -> updateMessage(targetId, "Error: ${event.message}", false, ChatRole.ERROR)
                         is HealEvent.StreamEnd -> {
-                            updateMessage(targetId, fullResponseText, false, reasoning = fullReasoningText)
+                            // Final sync of the full text to ensure DB and UI are perfect
+                            val finalState = _uiState.value.messages.find { it.id == targetId }
+                            val finalFullText = (finalState?.text ?: "")
+                            val finalFullReasoning = (finalState?.reasoning ?: "")
+
+                            updateMessage(targetId, finalFullText, false, reasoning = finalFullReasoning)
                             
                             // Persist Assistant Message WITH tool calls if any
                             val toolCallsJson = if (currentToolCalls.isNotEmpty()) {
@@ -304,8 +308,8 @@ class ChatViewModel @Inject constructor(
                             chatDao.insertMessage(ChatMessageEntity(
                                 sessionId = sessionId,
                                 role = "assistant",
-                                content = fullResponseText,
-                                reasoning = fullReasoningText,
+                                content = finalFullText,
+                                reasoning = finalFullReasoning,
                                 timestamp = System.currentTimeMillis(),
                                 toolCallsJson = toolCallsJson
                             ))
@@ -346,21 +350,21 @@ class ChatViewModel @Inject constructor(
     }
 
     fun approveRecord(requestId: String, messageId: String) {
-        Log.d("ChatViewModel", "approveRecord called for docId: $requestId, messageId: $messageId")
         viewModelScope.launch {
             val doc = uiState.value.documents.find { it.id == requestId }
             if (doc == null) {
-                Log.e("ChatViewModel", "Could not find document with ID: $requestId in ${uiState.value.documents.size} docs")
+                Log.e("ChatViewModel", "Could not find document with ID: $requestId")
                 return@launch
             }
             
             val fullText = doc.fullText ?: documentManager.readDocumentText(doc.name)
-            Log.d("ChatViewModel", "Document text loaded (length: ${fullText.length}). Sending hidden data...")
             
             val activeMessage = _uiState.value.messages.find { it.id == messageId }
             val callId = activeMessage?.pendingToolCall?.toolCallId
-            Log.d("ChatViewModel", "Using toolCallId: $callId for follow-up")
             
+            // Add a small spacer/header to the existing bubble text before continuing
+            appendToMessage(messageId, "\n\n---\n", true)
+
             // Send as "Tool Result" - continues the session
             sendMessage(
                 userText = fullText, 
@@ -376,6 +380,22 @@ class ChatViewModel @Inject constructor(
             val index = newList.indexOfLast { it.id == messageId }
             if (index != -1) {
                 newList[index] = newList[index].copy(pendingToolCall = null, isActionResolved = true)
+            }
+            state.copy(messages = newList)
+        }
+    }
+
+    private fun appendToMessage(id: String, textDelta: String?, isPending: Boolean, reasoningDelta: String? = null) {
+        _uiState.update { state ->
+            val newList = state.messages.toMutableList()
+            val index = newList.indexOfLast { it.id == id }
+            if (index != -1) {
+                val current = newList[index]
+                newList[index] = current.copy(
+                    text = current.text + (textDelta ?: ""),
+                    reasoning = (current.reasoning ?: "") + (reasoningDelta ?: ""),
+                    isPending = isPending
+                )
             }
             state.copy(messages = newList)
         }
