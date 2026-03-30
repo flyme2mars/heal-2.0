@@ -41,14 +41,14 @@ export async function POST(req: NextRequest) {
     `;
 
     // 2026 Context Engineering: Convert history to AI SDK messages
-    const pastMessages: any[] = (history || []).map(msg => {
+    const messages: any[] = (history || []).map(msg => {
       const role = msg.role.toLowerCase();
       
       if (role === 'assistant') {
         const toolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
         return {
           role: 'assistant' as const,
-          content: msg.content,
+          content: msg.content || "", // Content can be empty if only tool calls
           toolCalls: toolCalls?.map((tc: any) => ({
             type: 'function',
             id: tc.toolCallId,
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
             {
               type: 'tool-result',
               toolCallId: msg.toolCallId,
-              toolName: 'request_medical_record', // Default for this app
+              toolName: 'request_medical_record',
               result: msg.content
             }
           ]
@@ -88,25 +88,24 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    // If it's a system injection, we can optionally wrap it as a more authoritative system message
-    // BUT if toolCallId is present, we should actually treat the current prompt as a tool result!
-    let currentMessage: any;
+    // Handle Current Message
     const activeToolCallId = (body as any).toolCallId;
-
     if (activeToolCallId) {
-      currentMessage = {
+      // Sequence: The history MUST have ended with an assistant tool-call.
+      // The current message MUST be the tool-result.
+      messages.push({
         role: "tool" as const,
         content: [
           {
             type: "tool-result",
             toolCallId: activeToolCallId,
             toolName: "request_medical_record",
-            result: prompt
+            result: prompt // This is the full text of the record
           }
         ]
-      };
+      });
     } else {
-      currentMessage = {
+      messages.push({
         role: "user" as const,
         content: [
           { type: "text", text: isSystemInjection ? `SYSTEM MEMORY UPDATE: ${prompt}` : prompt || "Please analyze my health status." },
@@ -115,14 +114,14 @@ export async function POST(req: NextRequest) {
             image: att.url,
           }))
         ]
-      };
+      });
     }
 
     // Use specific content parts for multimodal support
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
       system: systemInstruction,
-      messages: [...pastMessages, currentMessage],
+      messages: messages,
       providerOptions: {
         google: {
           thinkingConfig: {

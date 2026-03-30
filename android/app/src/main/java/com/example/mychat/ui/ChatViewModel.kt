@@ -227,7 +227,10 @@ class ChatViewModel @Inject constructor(
                 val memorySnapshot = documentManager.getMemorySnapshot()
                 
                 val allHistory = chatDao.getMessagesForSessionList(sessionId)
-                val history = allHistory.dropLast(1).takeLast(20).map { 
+                
+                // Construct history but EXCLUDE the message we just persisted above (it will be sent as the 'prompt' or 'toolCallId' result)
+                // This ensures the backend receives: [...previous_history] + [current_payload]
+                val history = allHistory.filter { it.timestamp < messageToPersist.timestamp }.takeLast(20).map { 
                     val map = mutableMapOf("role" to it.role, "content" to it.content)
                     it.toolCallId?.let { id -> map["toolCallId"] = id }
                     it.toolCallsJson?.let { json -> map["toolCalls"] = json }
