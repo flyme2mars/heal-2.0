@@ -7,46 +7,36 @@ import { ChatRequest } from "@/types/chat";
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  let lastAttemptedMessages: ModelMessage[] = [];
+  let lastAttemptedMessages: any[] = [];
   try {
-    const body: ChatRequest = await req.json();
+    const rawBody = await req.text();
+    const body: ChatRequest = JSON.parse(rawBody);
     const { prompt, history, context, attachments, toolCallId: activeToolCallId } = body;
 
     const vaultIndex = context.fhir_records?.find(r => r.startsWith("LOCAL VAULT INDEX:")) || "No records in vault.";
 
-    const systemInstruction = `
-      You are Heal 2.0, a professional clinical health AI.
-      INDEX: ${vaultIndex}
-      AGENTIC WORKFLOW:
-      1. Use 'request_medical_record' for clinical data.
-      2. Provide a medical synthesis immediately after receiving data.
-    `;
+    const systemInstruction = `You are Heal 2.0. Clinical AI. Vault Index: ${vaultIndex}`;
 
-    const messages: ModelMessage[] = [];
+    const messages: any[] = [];
 
-    // Map history with DEFINITIVE 6.0 schema compliance
+    // Map history
     (history || []).forEach((msg, idx) => {
       const role = msg.role.toLowerCase();
       try {
         if (role === 'assistant') {
           const rawToolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
-          
           if (rawToolCalls && Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
             const parts: any[] = [];
-            if (msg.content && msg.content.trim().length > 0) {
-              parts.push({ type: 'text', text: msg.content });
-            }
-            
+            if (msg.content) parts.push({ type: 'text', text: msg.content });
             rawToolCalls.forEach((tc: any) => {
               parts.push({
                 type: 'tool-call',
                 toolCallId: tc.toolCallId,
                 toolName: tc.name,
-                // AI SDK 6.0: uses 'input' instead of 'args'
-                input: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : tc.arguments
+                // Check if version 6.0 needs 'args' or 'input'
+                args: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : tc.arguments
               });
             });
-            
             messages.push({ role: 'assistant', content: parts });
           } else {
             messages.push({ role: 'assistant', content: msg.content || " " });
@@ -59,27 +49,21 @@ export async function POST(req: NextRequest) {
                 type: 'tool-result',
                 toolCallId: msg.toolCallId || "unknown",
                 toolName: 'request_medical_record',
-                // AI SDK 6.0: tool results use 'output' with specific {type, value} structure
-                output: {
-                  type: 'text',
-                  value: msg.content 
-                }
+                result: msg.content // Trying 'result' again as some 6.0 versions expect this
               }
             ]
           });
-        } else if (role === 'system') {
-          messages.push({ role: 'system', content: msg.content });
         } else {
-          messages.push({ role: 'user', content: msg.content });
+          messages.push({ role: role === 'system' ? 'system' : 'user', content: msg.content });
         }
       } catch (e) {
         console.error(`History error at ${idx}:`, e);
       }
     });
 
-    // Handle Current Message
+    // Handle Current
     if (activeToolCallId) {
-      // 1. SEQUENCE REPAIR
+      // Ensure matching call exists in messages
       const last = messages[messages.length - 1];
       const hasCall = last?.role === 'assistant' && 
                       Array.isArray(last.content) && 
@@ -88,81 +72,62 @@ export async function POST(req: NextRequest) {
       if (!hasCall) {
         messages.push({
           role: 'assistant',
-          content: [
-            {
-              type: 'tool-call',
-              toolCallId: activeToolCallId,
-              toolName: 'request_medical_record',
-              input: { record_id: "auto-repaired" }
-            }
-          ]
+          content: [{ 
+            type: 'tool-call', 
+            toolCallId: activeToolCallId, 
+            toolName: 'request_medical_record', 
+            args: { record_id: "repair" } 
+          }]
         });
       }
 
-      // 2. Add THE RESULT (Proper 6.0 Structure)
       messages.push({
         role: 'tool',
-        content: [
-          {
-            type: 'tool-result',
-            toolCallId: activeToolCallId,
-            toolName: 'request_medical_record',
-            output: {
-              type: 'text',
-              value: `[CLINICAL DATA SOURCE AUTHORIZED]:\n\n${prompt}`
-            }
-          }
-        ]
+        content: [{
+          type: 'tool-result',
+          toolCallId: activeToolCallId,
+          toolName: 'request_medical_record',
+          result: `[DATA]: ${prompt}`
+        }]
       });
-
-      // No user synthetic prompt here - let the sequence [assistant call -> tool result] drive generation
     } else {
-      if (attachments && attachments.length > 0) {
-        messages.push({
-          role: 'user',
-          content: [
-            { type: 'text', text: prompt || "Analyze my status." },
-            ...attachments.map(a => ({ type: 'image' as const, image: a.url }))
-          ]
-        });
-      } else {
-        messages.push({ role: 'user', content: prompt || "Analyze my status." });
-      }
+      messages.push({
+        role: 'user',
+        content: prompt || "Analyze status."
+      });
     }
 
     lastAttemptedMessages = messages;
-    console.log("6.0_TRACE:", JSON.stringify(messages.map(m => ({ 
-      role: m.role, 
-      parts: Array.isArray(m.content) ? m.content.map(p => p.type) : 'str' 
-    })), null, 2));
 
-    const result = streamText({
-      model: google("gemini-3.1-flash-lite-preview"),
-      system: systemInstruction,
-      messages: messages,
-      providerOptions: {
-        google: {
-          thinkingConfig: {
-            thinkingLevel: "medium",
-            includeThoughts: true
-          }
-        }
-      },
-      tools: {
-        request_medical_record: tool({
-          description: "Get full medical record using ID from the index.",
-          inputSchema: z.object({
-            record_id: z.string(),
-            reason: z.string()
+    // THE ACTUAL INVESTIGATION: 
+    // We will call streamText but catch the specific error to find the missing field.
+    try {
+      const result = streamText({
+        model: google("gemini-3.1-flash-lite-preview"),
+        system: systemInstruction,
+        messages: messages,
+        tools: {
+          request_medical_record: tool({
+            description: "Get record",
+            inputSchema: z.object({ record_id: z.string(), reason: z.string() })
           })
-        })
-      }
-    });
+        }
+      });
 
-    return (result as any).toUIMessageStreamResponse();
+      return (result as any).toUIMessageStreamResponse();
+    } catch (streamError: any) {
+      console.error(">>> [INVESTIGATION] STREAM_TEXT REJECTED PROMPT");
+      console.error(">>> ERROR:", streamError.message);
+      // Return the error details to Android so we can read it in the logs
+      return NextResponse.json({ 
+        error: "INVESTIGATION_FAILED", 
+        detail: streamError.message,
+        messages_sent: messages.map(m => ({ role: m.role, contentIsArray: Array.isArray(m.content) }))
+      }, { status: 400 });
+    }
 
   } catch (error: any) {
-    console.error("ERROR:", error.message);
+    console.error("CRITICAL ERROR:", error.message);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
