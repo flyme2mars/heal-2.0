@@ -11,12 +11,30 @@ export async function POST(req: NextRequest) {
     const body: ChatRequest = await req.json();
     const { prompt, history, context, attachments, toolCallId: activeToolCallId } = body;
 
+    const vaultIndex = context.fhir_records?.find(r => r.startsWith("LOCAL VAULT INDEX:")) || "No records in vault.";
+
     const systemInstruction = `
-      You are Heal 2.0, a clinical health AI.
-      AGENTIC WORKFLOW:
-      1. ALWAYS use 'Thinking' to describe your plan.
-      2. Use 'request_medical_record' for full records.
-      3. synthesize data immediately after receiving it. 
+      You are Heal 2.0, a professional and highly capable health AI agent. 
+      You act as a clinical collaborator, helping users manage their health records and data.
+
+      CRITICAL AGENTIC BEHAVIOR:
+      1. YOU HAVE ACCESS TO A VAULT INDEX. Look at the "CURRENT LOCAL VAULT INDEX" below.
+      2. NEVER ASK THE USER FOR RECORD IDS. The IDs are already provided in the index.
+      3. IF YOU SEE A RELEVANT RECORD, CALL 'request_medical_record' IMMEDIATELY using the ID from the index.
+      4. ALWAYS use 'Thinking' to describe your clinical reasoning process.
+      5. After receiving clinical data (tool result), provide a thorough synthesis and answer the user's original question.
+
+      CURRENT LOCAL VAULT INDEX:
+      ${vaultIndex}
+
+      TONE & STYLE:
+      - Clinical, direct, and empathetic.
+      - No unnecessary greetings. 
+      - If you are calling a tool, explain briefly in 'Thinking' and then execute.
+
+      CONTEXT:
+      - Vitals: ${context.health_connect ? JSON.stringify(context.health_connect) : 'None'}
+      - Medical Summary: ${context.fhir_records?.filter(r => !r.startsWith("LOCAL VAULT INDEX:")).join('\n') || 'None'}
     `;
 
     const messages: any[] = [];
@@ -64,7 +82,6 @@ export async function POST(req: NextRequest) {
 
     // Handle Current
     if (activeToolCallId) {
-      // Sequence check: last message must be assistant with tool calls
       const lastMsg = messages[messages.length - 1];
       const hasCall = lastMsg?.role === 'assistant' && 
                       Array.isArray(lastMsg.content) && 
@@ -79,9 +96,13 @@ export async function POST(req: NextRequest) {
 
       messages.push({
         role: "tool",
-        content: [{ type: "tool-result", toolCallId: activeToolCallId, toolName: "request_medical_record", result: `[CLINICAL DATA]\n\n${prompt}` }]
+        content: [{ type: "tool-result", toolCallId: activeToolCallId, toolName: "request_medical_record", result: `[CLINICAL DATA INJECTED]\n\n${prompt}` }]
       });
-      messages.push({ role: "user", content: "Please synthesize the record above." });
+      
+      messages.push({
+        role: "user",
+        content: "I have granted you access to the record. Please synthesize the data and answer my previous question about my chest tightness."
+      });
     } else {
       if (attachments?.length) {
         messages.push({
@@ -113,13 +134,16 @@ export async function POST(req: NextRequest) {
       },
       tools: {
         request_medical_record: tool({
-          description: "Get medical record",
-          inputSchema: z.object({ record_id: z.string(), reason: z.string() })
+          description: "Request full-text access to a specific medical record from the user's vault using its ID from the index.",
+          inputSchema: z.object({
+            record_id: z.string().describe("The ID from the LOCAL VAULT INDEX"),
+            reason: z.string().describe("Why you need this record")
+          }),
         })
       }
     });
 
-    return result.toUIMessageStreamResponse();
+    return (result as any).toUIMessageStreamResponse();
 
   } catch (error: any) {
     console.error(">>> [CRITICAL] 500 ERROR DETECTED:", error.message);
