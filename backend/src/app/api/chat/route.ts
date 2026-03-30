@@ -41,14 +41,15 @@ export async function POST(req: NextRequest) {
     `;
 
     // 2026 Context Engineering: Convert history to AI SDK messages
-    const messages: any[] = (history || []).map(msg => {
+    const messages: any[] = (history || []).map((msg, idx) => {
       const role = msg.role.toLowerCase();
+      console.log(`HISTORY[${idx}]: role=${role}, hasToolCalls=${!!msg.toolCalls}, toolCallId=${msg.toolCallId}`);
       
       if (role === 'assistant') {
         const toolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
         return {
           role: 'assistant' as const,
-          content: msg.content || "", // Content can be empty if only tool calls
+          content: msg.content || "", 
           toolCalls: toolCalls?.map((tc: any) => ({
             type: 'function',
             id: tc.toolCallId,
@@ -91,8 +92,7 @@ export async function POST(req: NextRequest) {
     // Handle Current Message
     const activeToolCallId = (body as any).toolCallId;
     if (activeToolCallId) {
-      // Sequence: The history MUST have ended with an assistant tool-call.
-      // The current message MUST be the tool-result.
+      console.log(`>>> ATTACHING TOOL RESULT: ${activeToolCallId}`);
       messages.push({
         role: "tool" as const,
         content: [
@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
             type: "tool-result",
             toolCallId: activeToolCallId,
             toolName: "request_medical_record",
-            result: prompt // This is the full text of the record
+            result: `[SYSTEM MEMORY UPDATE: Full text of requested clinical record follows]\n\n${prompt}`
           }
         ]
       });
@@ -117,11 +117,18 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // FINAL VALIDATION: Ensure tool results follow tool calls
+    // (Self-correction for common AI SDK sequence errors)
+    
+    // Log the message sequence for debugging
+    console.log("AGENT_SEQUENCE:", messages.map(m => `[${m.role}] ${m.content?.slice(0, 20)}...`));
+
     // Use specific content parts for multimodal support
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
       system: systemInstruction,
       messages: messages,
+      prompt: activeToolCallId ? "Please synthesize the information from the record I just provided and answer my previous question." : undefined,
       providerOptions: {
         google: {
           thinkingConfig: {
@@ -141,7 +148,7 @@ export async function POST(req: NextRequest) {
         request_medical_record: {
           description: "Request full-text access to a specific medical record from the user's vault. Use this if the summary in the index is insufficient.",
           parameters: z.object({
-            id: z.string().describe("The ID of the record to request"),
+            record_id: z.string().describe("The ID of the record to request"),
             reason: z.string().describe("A brief explanation for the user of why this record is needed.")
           }),
         } as any

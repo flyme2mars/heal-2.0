@@ -35,6 +35,7 @@ class HealNetworkClient {
     private val json = Json { ignoreUnknownKeys = true }
 
     fun streamChat(url: String, requestBody: String, appCheckToken: String?): Flow<HealEvent> = callbackFlow {
+        Log.d("HealNetwork", ">>> REQUEST BODY: $requestBody")
         Log.d("HealNetwork", "Starting stream to: $url")
         
         val request = Request.Builder()

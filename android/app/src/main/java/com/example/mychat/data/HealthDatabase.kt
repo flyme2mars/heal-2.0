@@ -117,7 +117,7 @@ interface ChatDao {
     suspend fun getMessagesForSessionList(sessionId: String): List<ChatMessageEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertMessage(message: ChatMessageEntity)
+    suspend fun insertMessage(message: ChatMessageEntity): Long
 
     @Query("DELETE FROM chat_messages WHERE sessionId = :sessionId")
     suspend fun clearSessionHistory(sessionId: String)

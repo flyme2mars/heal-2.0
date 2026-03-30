@@ -308,7 +308,7 @@ fun MessageBubble(
                                             val args = json.parseToJsonElement(tool.arguments) as JsonObject
                                             
                                             // Robust ID extraction
-                                            var id = args["id"]?.jsonPrimitive?.content ?: ""
+                                            var id = args["record_id"]?.jsonPrimitive?.content ?: args["id"]?.jsonPrimitive?.content ?: ""
                                             if (id.isBlank()) {
                                                 id = args.entries.find { it.key.contains("id", ignoreCase = true) }?.value?.jsonPrimitive?.content ?: ""
                                             }

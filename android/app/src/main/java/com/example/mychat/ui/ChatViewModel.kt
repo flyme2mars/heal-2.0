@@ -186,6 +186,7 @@ class ChatViewModel @Inject constructor(
                 else -> "user"
             }
             
+            // 1. Persist CURRENT payload
             val messageToPersist = ChatMessageEntity(
                 sessionId = sessionId,
                 role = dbRole,
@@ -193,7 +194,7 @@ class ChatViewModel @Inject constructor(
                 timestamp = System.currentTimeMillis(),
                 toolCallId = toolCallId
             )
-            chatDao.insertMessage(messageToPersist)
+            val currentMessageDbId = chatDao.insertMessage(messageToPersist)
 
             val modelMessageId = java.util.UUID.randomUUID().toString()
             val targetId: String
@@ -226,19 +227,29 @@ class ChatViewModel @Inject constructor(
                 val medicalSummary = medicalRecordManager.getMedicalSummary()
                 val memorySnapshot = documentManager.getMemorySnapshot()
                 
+                // 2. CONSTRUCT HISTORY - strictly excludes the message we just inserted
                 val allHistory = chatDao.getMessagesForSessionList(sessionId)
-                
-                // Construct history but EXCLUDE the message we just persisted above (it will be sent as the 'prompt' or 'toolCallId' result)
-                // This ensures the backend receives: [...previous_history] + [current_payload]
-                val history = allHistory.filter { it.timestamp < messageToPersist.timestamp }.takeLast(20).map { 
+                val history = allHistory.filter { it.id != currentMessageDbId }.takeLast(20).map { 
                     val map = mutableMapOf("role" to it.role, "content" to it.content)
-                    it.toolCallId?.let { id -> map["toolCallId"] = id }
-                    it.toolCallsJson?.let { json -> map["toolCalls"] = json }
+                    
+                    // CRITICAL: For Assistant messages, toolCalls metadata MUST be included 
+                    // otherwise the sequence [Assistant(Call) -> Tool(Result)] is broken.
+                    if (it.role.lowercase() == "assistant" && !it.toolCallsJson.isNullOrBlank()) {
+                        map["toolCalls"] = it.toolCallsJson
+                    }
+                    
+                    // For existing Tool results in history
+                    if (it.role.lowercase() == "tool" && !it.toolCallId.isNullOrBlank()) {
+                        map["toolCallId"] = it.toolCallId
+                    }
+                    
                     map.toMap()
                 }
 
+                Log.d("ChatViewModel", "HISTORY TRACE: ${history.map { "${it["role"]}(hasCalls=${it.containsKey("toolCalls")})" }}")
+
                 val docMap = uiState.value.documents.joinToString("\n") { 
-                    "DOCUMENT [ID: ${it.id}] | Label: ${it.userLabel ?: it.name} | Type: ${it.recordType ?: "Unknown"} | Tags: ${it.tags.joinToString(", ")} | AI Summary: ${it.summary}"
+                    "DOCUMENT [ID: ${it.id}] | Label: ${it.userLabel ?: it.name} | Type: ${it.recordType ?: "Unknown"} | Tags: ${it.tags.joinToString(", ")} | Date: ${it.recordDate ?: "No Date"} | AI Summary: ${it.summary}"
                 }
 
                 val attachments = mutableListOf<ChatAttachment>()
@@ -311,7 +322,12 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             val doc = uiState.value.documents.find { it.id == requestId } ?: return@launch
             val fullText = doc.fullText ?: documentManager.readDocumentText(doc.name)
-            val callId = _uiState.value.messages.find { it.id == messageId }?.pendingToolCall?.toolCallId
+            
+            val activeMessage = _uiState.value.messages.find { it.id == messageId }
+            val callId = activeMessage?.pendingToolCall?.toolCallId
+            
+            Log.d("ChatViewModel", "APPROVING: doc=$requestId, msgId=$messageId, foundCallId=$callId")
+            
             appendToMessage(messageId, "\n\n---\n", true)
             sendMessage(userText = fullText, isHiddenData = true, toolCallId = callId)
         }
