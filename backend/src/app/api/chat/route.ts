@@ -16,18 +16,20 @@ export async function POST(req: NextRequest) {
     }
 
     const systemInstruction = `
-      You are Heal 2.0, a professional and friendly health AI assistant. 
-      Your goal is to help the user understand their health data, medical records, and any images they provide.
+      You are Heal 2.0, a professional and friendly health AI agent. 
+      You act as a clinical collaborator, helping users manage their health records and data.
+
+      IMPORTANT FLOW:
+      1. You are provided with a "LOCAL VAULT INDEX" which contains IDs and summaries of the user's health records.
+      2. If you need the full text of a specific record to answer accurately, you MUST use the 'request_medical_record' tool.
+      3. Explain to the user WHY you need access to that specific record before or while calling the tool.
+      4. Once approved, the system will provide the full text in a follow-up message.
 
       TONE GUIDELINES:
       1. Be professional, calm, and empathetic. 
       2. Use clear, direct language. Avoid medical jargon unless you explain it simply.
       3. ABSOLUTELY NO flowery or "magical" language.
-      4. Be concise.
-
-      VISION GUIDELINES:
-      - If the user provides an image, analyze it carefully. 
-      - Always state that you are an AI and your analysis is for informational purposes only.
+      4. Be concise and actionable.
 
       CONTEXT:
       - Health Vitals: ${context.health_connect ? Object.entries(context.health_connect).map(([k, v]) => `${k}: ${v}`).join(', ') : 'No data available'}
@@ -43,7 +45,7 @@ export async function POST(req: NextRequest) {
         {
           role: "user",
           content: [
-            { type: "text", text: prompt || "Please analyze this image." },
+            { type: "text", text: prompt || "Please analyze my health status." },
             ...(attachments || []).map(att => ({
               type: "image" as const,
               image: att.url,
@@ -51,6 +53,14 @@ export async function POST(req: NextRequest) {
           ]
         }
       ],
+      providerOptions: {
+        google: {
+          thinkingConfig: {
+            thinkingLevel: "medium",
+            includeThoughts: true
+          }
+        }
+      },
       tools: {
         update_memory: {
           description: "Update a memory file stored on the user's phone.",
@@ -59,10 +69,11 @@ export async function POST(req: NextRequest) {
             content: z.string().describe("new markdown content")
           }),
         } as any,
-        read_medical_record: {
-          description: "Request the full text content of a specific medical document from the user's vault.",
+        request_medical_record: {
+          description: "Request full-text access to a specific medical record from the user's vault. Use this if the summary in the index is insufficient.",
           parameters: z.object({
-            filename: z.string().describe("The name of the file to read")
+            id: z.string().describe("The ID of the record to request"),
+            reason: z.string().describe("A brief explanation for the user of why this record is needed.")
           }),
         } as any
       }
@@ -75,6 +86,8 @@ export async function POST(req: NextRequest) {
           for await (const part of result.fullStream) {
             if (part.type === 'text-delta') {
               controller.enqueue(encoder.encode(`data: 0:${JSON.stringify(part.text)}\n\n`));
+            } else if (part.type === 'reasoning') {
+              controller.enqueue(encoder.encode(`data: r:${JSON.stringify(part.text)}\n\n`));
             } else if (part.type === 'tool-call') {
               console.log("AI requested tool:", part.toolName);
               controller.enqueue(encoder.encode(`data: 9:${JSON.stringify({

@@ -23,6 +23,7 @@ class ChatViewModel @Inject constructor(
     private val healthManager: HealthManager,
     private val medicalRecordManager: MedicalRecordManager,
     private val documentManager: DocumentManager,
+    private val localIndexer: LocalIndexer,
     private val networkClient: HealNetworkClient
 ) : ViewModel() {
 
@@ -31,10 +32,8 @@ class ChatViewModel @Inject constructor(
     val uiState: StateFlow<ChatUiState> = combine(
         _uiState,
         documentManager.getAllDocuments()
-    ) { state, docs ->
-        state.copy(documents = docs.map { 
-            HealthDocument(it.id, it.name, it.type, it.internalPath, it.timestamp, it.summary) 
-        })
+    ) { state: ChatUiState, docs: List<HealthDocument> ->
+        state.copy(documents = docs)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ChatUiState())
 
     init {
@@ -51,34 +50,6 @@ class ChatViewModel @Inject constructor(
                 userWeight = weight,
                 medicalSummary = summary
             ) }
-        }
-    }
-
-    val healthPermissions = healthManager.permissions
-    fun getHealthSdkStatus() = healthManager.getSdkStatus()
-    fun getHealthSettingsIntent() = healthManager.getHealthConnectSettingsIntent()
-
-    fun updateProfile(firstName: String, lastName: String, gender: String) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isSyncing = true) }
-            try {
-                medicalRecordManager.updatePatient(firstName, lastName, gender)
-                refreshUserData()
-            } finally {
-                _uiState.update { it.copy(isSyncing = false) }
-            }
-        }
-    }
-
-    fun updateWeight(weight: Double) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isSyncing = true) }
-            try {
-                medicalRecordManager.updateWeight(weight)
-                refreshUserData()
-            } finally {
-                _uiState.update { it.copy(isSyncing = false) }
-            }
         }
     }
 
@@ -107,7 +78,7 @@ class ChatViewModel @Inject constructor(
         val userMessage = ChatMessage(
             text = userText, 
             role = ChatRole.USER,
-            imageUri = imageUri?.toString() // Save the URI string
+            imageUri = imageUri?.toString()
         )
         _uiState.update { it.copy(
             messages = it.messages + userMessage,
@@ -122,7 +93,11 @@ class ChatViewModel @Inject constructor(
                 val healthSummary = if (healthManager.hasAllPermissions()) healthManager.fetchHealthSummary() else "Permissions not granted."
                 val medicalSummary = medicalRecordManager.getMedicalSummary()
                 val memorySnapshot = documentManager.getMemorySnapshot()
-                val docSummaries = uiState.value.documents.joinToString("\n") { "- ${it.name}: ${it.summary}" }
+                
+                // Agent Context: Only sending Metadata "Map"
+                val docMap = uiState.value.documents.joinToString("\n") { 
+                    "- ID: ${it.id} | ${it.recordType ?: "Unknown"} | ${it.recordDate ?: "No Date"} | Summary: ${it.summary}"
+                }
 
                 val attachments = mutableListOf<ChatAttachment>()
                 imageUri?.let { uri ->
@@ -135,7 +110,7 @@ class ChatViewModel @Inject constructor(
                     prompt = userText,
                     context = ChatContext(
                         health_connect = mapOf("summary" to healthSummary),
-                        fhir_records = listOf(medicalSummary, "Vault Documents:\n$docSummaries"),
+                        fhir_records = listOf(medicalSummary, "LOCAL VAULT INDEX:\n$docMap"),
                         memory_snapshot = memorySnapshot
                     ),
                     attachments = attachments
@@ -145,6 +120,7 @@ class ChatViewModel @Inject constructor(
                 val json = Json { ignoreUnknownKeys = true }
                 val requestBody = json.encodeToString(request)
                 var fullResponseText = ""
+                var fullReasoningText = ""
                 var lastUpdateTime = System.currentTimeMillis()
 
                 networkClient.streamChat(backendUrl, requestBody, null).collect { event ->
@@ -152,86 +128,154 @@ class ChatViewModel @Inject constructor(
                         is HealEvent.TextDelta -> {
                             fullResponseText += event.text
                             if (System.currentTimeMillis() - lastUpdateTime > 50) {
-                                updateMessage(modelMessage.id, fullResponseText, true)
+                                updateMessage(modelMessage.id, fullResponseText, true, reasoning = fullReasoningText)
+                                lastUpdateTime = System.currentTimeMillis()
+                            }
+                        }
+                        is HealEvent.ReasoningDelta -> {
+                            fullReasoningText += event.text
+                            if (System.currentTimeMillis() - lastUpdateTime > 50) {
+                                updateMessage(modelMessage.id, fullResponseText, true, reasoning = fullReasoningText)
                                 lastUpdateTime = System.currentTimeMillis()
                             }
                         }
                         is HealEvent.ToolCall -> {
-                            if (event.name == "update_memory") {
-                                try {
-                                    val argsJson = json.parseToJsonElement(event.arguments) as JsonObject
-                                    val filename = argsJson["filename"]?.jsonPrimitive?.content ?: ""
-                                    val content = argsJson["content"]?.jsonPrimitive?.content ?: ""
-                                    if (filename.isNotEmpty()) {
-                                        documentManager.saveMemoryFile(filename, content)
-                                    }
-                                } catch (e: Exception) { Log.e("ChatViewModel", "Memory Update failed", e) }
-                            } else if (event.name == "read_medical_record") {
-                                try {
-                                    val argsJson = json.parseToJsonElement(event.arguments) as JsonObject
-                                    val filename = argsJson["filename"]?.jsonPrimitive?.content ?: ""
-                                    if (filename.isNotEmpty()) {
-                                        val content = documentManager.readDocumentText(filename)
-                                        sendMessage("System Context: Content of '$filename' is:\n$content")
-                                    }
-                                } catch (e: Exception) { Log.e("ChatViewModel", "Read failed", e) }
-                            }
+                            handleToolCall(event, modelMessage.id)
                         }
-                        is HealEvent.Error -> updateMessage(modelMessage.id, "Connection Error: ${event.message}", false, ChatRole.ERROR)
-                        is HealEvent.StreamEnd -> updateMessage(modelMessage.id, fullResponseText, false)
+                        is HealEvent.Error -> updateMessage(modelMessage.id, "Error: ${event.message}", false, ChatRole.ERROR)
+                        is HealEvent.StreamEnd -> updateMessage(modelMessage.id, fullResponseText, false, reasoning = fullReasoningText)
                     }
                 }
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Request failed", e)
-                val friendlyMessage = when {
-                    e is java.net.UnknownHostException -> "No internet connection. Please check your Wi-Fi or mobile data."
-                    e is java.net.ConnectException -> "Could not reach Heal 2.0 server. Please try again later."
-                    else -> "Failed to connect to Heal 2.0 Backend."
-                }
-                updateMessage(modelMessage.id, friendlyMessage, false, ChatRole.ERROR)
+                updateMessage(modelMessage.id, "Failed to connect to Heal Agent.", false, ChatRole.ERROR)
             }
         }
     }
 
-    private fun updateMessage(id: String, text: String, isPending: Boolean, role: ChatRole? = null) {
+    private fun handleToolCall(event: HealEvent.ToolCall, messageId: String) {
+        val json = Json { ignoreUnknownKeys = true }
+        when (event.name) {
+            "update_memory" -> {
+                try {
+                    val argsJson = json.parseToJsonElement(event.arguments) as JsonObject
+                    val filename = argsJson["filename"]?.jsonPrimitive?.content ?: ""
+                    val content = argsJson["content"]?.jsonPrimitive?.content ?: ""
+                    if (filename.isNotEmpty()) {
+                        documentManager.saveMemoryFile(filename, content)
+                    }
+                } catch (e: Exception) { Log.e("ChatViewModel", "Memory Update failed", e) }
+            }
+            "request_medical_record" -> {
+                try {
+                    val argsJson = json.parseToJsonElement(event.arguments) as JsonObject
+                    val id = argsJson["id"]?.jsonPrimitive?.content ?: ""
+                    val reason = argsJson["reason"]?.jsonPrimitive?.content ?: "Needed for analysis"
+                    
+                    val document = uiState.value.documents.find { it.id == id }
+                    if (document != null) {
+                        _uiState.update { it.copy(
+                            pendingApprovals = it.pendingApprovals + PermissionRequest(
+                                id = id,
+                                documentName = document.name,
+                                reason = reason
+                            )
+                        ) }
+                    }
+                } catch (e: Exception) { Log.e("ChatViewModel", "Record Request failed", e) }
+            }
+        }
+    }
+
+    fun approveRecord(requestId: String) {
+        val request = uiState.value.pendingApprovals.find { it.id == requestId } ?: return
+        _uiState.update { it.copy(pendingApprovals = it.pendingApprovals.filter { r -> r.id != requestId }) }
+        
+        viewModelScope.launch {
+            val doc = uiState.value.documents.find { it.id == requestId } ?: return@launch
+            val fullText = doc.fullText ?: documentManager.readDocumentText(doc.name)
+            
+            // Re-sending with Full Context as a "System Context" injection
+            sendMessage("System Context: User approved access to '${doc.name}'. Full content is:\n$fullText")
+        }
+    }
+
+    fun rejectRecord(requestId: String) {
+        _uiState.update { it.copy(pendingApprovals = it.pendingApprovals.filter { r -> r.id != requestId }) }
+        // Potentially inform the model that access was denied
+    }
+
+    private fun updateMessage(id: String, text: String, isPending: Boolean, role: ChatRole? = null, reasoning: String? = null) {
         _uiState.update { state ->
             val newList = state.messages.toMutableList()
             val index = newList.indexOfLast { it.id == id }
             if (index != -1) {
-                newList[index] = newList[index].copy(text = text, isPending = isPending, role = role ?: newList[index].role)
+                newList[index] = newList[index].copy(
+                    text = text, 
+                    isPending = isPending, 
+                    role = role ?: newList[index].role,
+                    reasoning = reasoning ?: newList[index].reasoning
+                )
             }
             state.copy(messages = newList)
         }
     }
 
-    fun refreshMedicalSummary() = refreshUserData()
-    fun clearChat() { _uiState.update { it.copy(messages = emptyList()) } }
     fun uploadDocument(uri: Uri, name: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isSyncing = true) }
             val doc = documentManager.saveDocument(uri, name)
             if (doc != null) {
-                summarizeDocument(doc)
-                refreshUserData()
+                localIndexer.indexDocument(doc)
             }
             _uiState.update { it.copy(isSyncing = false) }
         }
     }
-    private fun summarizeDocument(doc: HealthDocument) {
+
+    fun updateProfile(firstName: String, lastName: String, gender: String) {
         viewModelScope.launch {
-            documentManager.updateDocumentSummary(doc.id, "Medical record regarding ${doc.name}.")
-            refreshUserData()
+            _uiState.update { it.copy(isSyncing = true) }
+            try {
+                medicalRecordManager.updatePatient(firstName, lastName, gender)
+                refreshUserData()
+            } finally {
+                _uiState.update { it.copy(isSyncing = false) }
+            }
         }
     }
+
+    fun updateWeight(weight: Double) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncing = true) }
+            try {
+                medicalRecordManager.updateWeight(weight)
+                refreshUserData()
+            } finally {
+                _uiState.update { it.copy(isSyncing = false) }
+            }
+        }
+    }
+
+    fun refreshMedicalSummary() = refreshUserData()
+
     fun deleteDocument(document: HealthDocument) { viewModelScope.launch { documentManager.deleteDocument(document) } }
+    fun clearChat() { _uiState.update { it.copy(messages = emptyList()) } }
 }
+
+data class PermissionRequest(
+    val id: String,
+    val documentName: String,
+    val reason: String
+)
 
 data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val isSyncing: Boolean = false,
     val medicalSummary: String = "No medical records found.",
     val documents: List<HealthDocument> = emptyList(),
+    val pendingApprovals: List<PermissionRequest> = emptyList(),
     val userName: String = "",
     val userWeight: String = "",
     val selectedImageUri: Uri? = null
 )
+

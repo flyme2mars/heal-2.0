@@ -11,5 +11,6 @@ data class ChatMessage(
     val text: String,
     val role: ChatRole,
     val isPending: Boolean = false,
+    val reasoning: String? = null,
     val imageUri: String? = null // Store the local URI for display
 )

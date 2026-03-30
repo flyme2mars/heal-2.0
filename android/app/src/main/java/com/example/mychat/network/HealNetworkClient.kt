@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit
 
 sealed class HealEvent {
     data class TextDelta(val text: String) : HealEvent()
+    data class ReasoningDelta(val text: String) : HealEvent()
     data class ToolCall(val id: String, val name: String, val arguments: String) : HealEvent()
     data class Error(val message: String) : HealEvent()
     object StreamEnd : HealEvent()
@@ -70,6 +71,18 @@ class HealNetworkClient {
                                 payload
                             }
                             trySend(HealEvent.TextDelta(cleanText))
+                            return
+                        }
+
+                        if (typeChar == 'r') {
+                            val cleanText = if (payload.startsWith("\"") && payload.endsWith("\"")) {
+                                payload.substring(1, payload.length - 1)
+                                    .replace("\\n", "\n")
+                                    .replace("\\\"", "\"")
+                            } else {
+                                payload
+                            }
+                            trySend(HealEvent.ReasoningDelta(cleanText))
                             return
                         }
 

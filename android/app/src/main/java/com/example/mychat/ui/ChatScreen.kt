@@ -131,6 +131,14 @@ fun ChatScreen(
             AnimatedVisibility(visible = !isClearing, exit = fadeOut(), enter = fadeIn()) {
                 LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(paddingValues).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(vertical = 16.dp)) {
                     items(uiState.messages, key = { it.id }) { MessageBubble(it, onImageClick = { uri -> showFullScreenImage = uri }) }
+                    
+                    items(uiState.pendingApprovals, key = { it.id }) { request ->
+                        PermissionRequestCard(
+                            request = request,
+                            onApprove = { viewModel.approveRecord(it) },
+                            onReject = { viewModel.rejectRecord(it) }
+                        )
+                    }
                 }
             }
             LaunchedEffect(uiState.messages.size) { if (uiState.messages.isNotEmpty()) listState.animateScrollToItem(uiState.messages.size - 1) }
@@ -144,31 +152,38 @@ fun MessageBubble(message: ChatMessage, onImageClick: (String) -> Unit) {
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val containerColor = when (message.role) {
         ChatRole.USER -> MaterialTheme.colorScheme.primary
-        ChatRole.MODEL -> MaterialTheme.colorScheme.secondaryContainer
+        ChatRole.MODEL -> MaterialTheme.colorScheme.surfaceContainerHigh
         else -> MaterialTheme.colorScheme.errorContainer
     }
     val contentColor = when (message.role) {
         ChatRole.USER -> MaterialTheme.colorScheme.onPrimary
-        ChatRole.MODEL -> MaterialTheme.colorScheme.onSecondaryContainer
+        ChatRole.MODEL -> MaterialTheme.colorScheme.onSurface
         else -> MaterialTheme.colorScheme.onErrorContainer
     }
 
-    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = alignment) {
+    Column(
+        modifier = Modifier.fillMaxWidth().animateContentSize(spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow)),
+        horizontalAlignment = alignment
+    ) {
+        if (!isUser && !message.reasoning.isNullOrBlank()) {
+            ThinkingTrace(reasoning = message.reasoning)
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
         Box(
             modifier = Modifier
                 .clip(
                     RoundedCornerShape(
-                        topStart = 20.dp, 
-                        topEnd = 20.dp, 
-                        bottomStart = if (isUser) 20.dp else 4.dp, 
-                        bottomEnd = if (isUser) 4.dp else 20.dp
+                        topStart = 24.dp, 
+                        topEnd = 24.dp, 
+                        bottomStart = if (isUser) 24.dp else 4.dp, 
+                        bottomEnd = if (isUser) 4.dp else 24.dp
                     )
                 )
                 .background(containerColor)
-                .widthIn(max = 300.dp)
+                .widthIn(max = 320.dp)
         ) {
             Column {
-                // Sent Image Display
                 if (message.imageUri != null) {
                     AsyncImage(
                         model = message.imageUri,
@@ -177,25 +192,106 @@ fun MessageBubble(message: ChatMessage, onImageClick: (String) -> Unit) {
                             .fillMaxWidth()
                             .height(200.dp)
                             .padding(4.dp)
-                            .clip(RoundedCornerShape(16.dp))
+                            .clip(RoundedCornerShape(20.dp))
                             .clickable { onImageClick(message.imageUri) },
                         contentScale = ContentScale.Crop
                     )
                 }
                 
-                // Message Text
-                Box(modifier = Modifier.padding(16.dp)) {
-                    if (message.isPending && message.text.isEmpty()) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = contentColor)
+                Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    if (message.isPending && message.text.isEmpty() && message.reasoning.isNullOrEmpty()) {
+                        WavyLoadingIndicator(color = contentColor)
                     } else {
                         MarkdownContent(text = message.text, contentColor = contentColor)
                     }
                 }
             }
         }
-        Text(text = if (isUser) "You" else "Heal 2.0", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+        Text(
+            text = if (isUser) "You" else "Heal Agent", 
+            style = MaterialTheme.typography.labelSmall, 
+            color = MaterialTheme.colorScheme.onSurfaceVariant, 
+            modifier = Modifier.padding(top = 4.dp, start = if (isUser) 0.dp else 8.dp, end = if (isUser) 8.dp else 0.dp)
+        )
     }
 }
+
+@Composable
+fun ThinkingTrace(reasoning: String) {
+    var expanded by remember { mutableStateOf(false) }
+    
+    Card(
+        onClick = { expanded = !expanded },
+        modifier = Modifier.widthIn(max = 280.dp).padding(start = 8.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+    ) {
+        Column(modifier = Modifier.padding(12.dp).animateContentSize()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Psychology, 
+                    contentDescription = null, 
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    "Agent Thinking", 
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.weight(1f))
+                Icon(
+                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            if (expanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = reasoning,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun WavyLoadingIndicator(color: Color) {
+    val infiniteTransition = rememberInfiniteTransition(label = "wavy")
+    val phase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 2f * Math.PI.toFloat(),
+        animationSpec = infiniteRepeatable(
+            animation = intrinsicSizeAnimation(2000),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "phase"
+    )
+
+    Row(modifier = Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        repeat(3) { index ->
+            val offset = (phase + index * 0.5f) % (2f * Math.PI.toFloat())
+            val y = Math.sin(offset.toDouble()).toFloat() * 4.dp.value
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .offset(y = y.dp)
+                    .clip(CircleShape)
+                    .background(color)
+            )
+        }
+    }
+}
+
+private fun intrinsicSizeAnimation(duration: Int): DurationBasedAnimationSpec<Float> = 
+    tween(duration, easing = LinearEasing)
+
 
 @Composable
 fun ChatInput(
@@ -263,3 +359,66 @@ fun ChatInput(
         }
     }
 }
+
+@Composable
+fun PermissionRequestCard(
+    request: com.example.mychat.ui.PermissionRequest,
+    onApprove: (String) -> Unit,
+    onReject: (String) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Lock, 
+                    contentDescription = null, 
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    "Data Access Request", 
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                "Heal Agent needs to access your medical record: \n\"${request.documentName}\"",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Reason: ${request.reason}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = { onReject(request.id) }) {
+                    Text("Deny", color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = { onApprove(request.id) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        contentColor = MaterialTheme.colorScheme.primaryContainer
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Grant Access")
+                }
+            }
+        }
+    }
+}
+

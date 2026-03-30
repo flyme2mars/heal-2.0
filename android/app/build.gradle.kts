@@ -71,6 +71,7 @@ dependencies {
     // Fixed dot-notation accessor
     implementation(libs.androidx.hilt.navigation.compose)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.play.services)
     
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
@@ -81,6 +82,7 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    implementation(libs.mlkit.text.recognition)
 
     debugImplementation(libs.androidx.compose.tooling)
 }

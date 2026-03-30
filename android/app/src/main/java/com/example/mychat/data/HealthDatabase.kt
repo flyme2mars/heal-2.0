@@ -14,10 +14,13 @@ import kotlinx.coroutines.flow.Flow
 data class HealthDocumentEntity(
     @PrimaryKey val id: String,
     val name: String,
-    val type: String,
+    val type: String, // "pdf", "image", "text"
+    val recordType: String? = null, // e.g., "Blood Test", "MRI"
+    val recordDate: String? = null, // ISO date string
     val internalPath: String,
     val timestamp: Long,
-    val summary: String? = null
+    val summary: String? = null,
+    val fullText: String? = null // Extracted text for indexing
 )
 
 @Dao
@@ -34,14 +37,17 @@ interface HealthDocumentDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDocument(document: HealthDocumentEntity)
 
-    @Query("UPDATE health_documents SET summary = :summary WHERE id = :id")
-    suspend fun updateSummary(id: String, summary: String)
+    @Query("UPDATE health_documents SET summary = :summary, recordType = :recordType, recordDate = :recordDate WHERE id = :id")
+    suspend fun updateMetadata(id: String, summary: String, recordType: String?, recordDate: String?)
+
+    @Query("UPDATE health_documents SET fullText = :text WHERE id = :id")
+    suspend fun updateFullText(id: String, text: String)
 
     @Query("DELETE FROM health_documents WHERE id = :id")
     suspend fun deleteDocument(id: String)
 }
 
-@Database(entities = [HealthDocumentEntity::class], version = 2)
+@Database(entities = [HealthDocumentEntity::class], version = 3)
 abstract class HealthDatabase : RoomDatabase() {
     abstract fun healthDocumentDao(): HealthDocumentDao
 }
