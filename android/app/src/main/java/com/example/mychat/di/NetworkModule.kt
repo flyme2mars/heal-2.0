@@ -5,6 +5,8 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import dagger.hilt.android.qualifiers.ApplicationContext
+import android.content.Context
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
@@ -25,7 +27,7 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideHealNetworkClient(client: OkHttpClient): HealNetworkClient {
-        return HealNetworkClient(client)
+    fun provideHealNetworkClient(client: OkHttpClient, @ApplicationContext context: Context): HealNetworkClient {
+        return HealNetworkClient(client, context)
     }
 }

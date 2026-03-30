@@ -1,41 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "@ai-sdk/google";
-import { streamText, tool, ModelMessage } from "ai";
+import { streamText, tool } from "ai";
 import { z } from "zod";
 import { ChatRequest } from "@/types/chat";
 
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  let lastAttemptedMessages: ModelMessage[] = [];
+  let lastAttemptedMessages: any[] = [];
   try {
     const rawBody = await req.text();
-    console.log(`>>> [DEBUG] Payload Size: ${rawBody.length} bytes`);
     const body: ChatRequest = JSON.parse(rawBody);
     const { prompt, history, context, attachments, toolCallId: activeToolCallId } = body;
 
     const vaultIndex = context.fhir_records?.find(r => r.startsWith("LOCAL VAULT INDEX:")) || "No records in vault.";
 
     const systemInstruction = `
-      You are Heal 2.0, a professional clinical health AI.
+      You are Heal 2.0, a professional clinical health AI agent.
       VAULT INDEX: ${vaultIndex}
+      
       AGENTIC WORKFLOW:
-      1. NEVER ask for IDs. Pull them from the index.
-      2. Call 'request_medical_record' for clinical data.
-      3. After receiving data, provide a synthesis immediately.
+      1. Use 'request_medical_record' tool for clinical data access.
+      2. Synthesize results immediately. Never return an empty response.
     `;
 
-    const messages: ModelMessage[] = [];
+    const messages: any[] = [];
 
-    // Map history
+    // Map history with strict 6.0 schema compliance
     (history || []).forEach((msg, idx) => {
       const role = msg.role.toLowerCase();
       try {
         if (role === 'assistant') {
           const rawToolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
+          
           if (rawToolCalls && Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
             const parts: any[] = [];
-            if (msg.content) parts.push({ type: 'text', text: msg.content });
+            // ONLY add text part if there is actual content. AI SDK 6.0 hates empty text parts.
+            if (msg.content && msg.content.trim().length > 0) {
+              parts.push({ type: 'text', text: msg.content });
+            }
+            
             rawToolCalls.forEach((tc: any) => {
               parts.push({
                 type: 'tool-call',
@@ -44,9 +48,10 @@ export async function POST(req: NextRequest) {
                 args: typeof tc.arguments === 'string' ? JSON.parse(tc.arguments) : tc.arguments
               });
             });
+            
             messages.push({ role: 'assistant', content: parts });
           } else {
-            messages.push({ role: 'assistant', content: msg.content || "" });
+            messages.push({ role: 'assistant', content: msg.content || " " });
           }
         } else if (role === 'tool') {
           messages.push({
@@ -56,8 +61,8 @@ export async function POST(req: NextRequest) {
                 type: 'tool-result',
                 toolCallId: msg.toolCallId || "unknown",
                 toolName: 'request_medical_record',
-                output: msg.content 
-              } as any
+                result: msg.content // Result is used for history persistence mapping
+              }
             ]
           });
         } else if (role === 'system') {
@@ -70,47 +75,55 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    // Handle Current
+    // Handle Current Message (Tool Result or User Prompt)
     if (activeToolCallId) {
-      // Manual sequence repair
+      // 1. Ensure history ended with the matching assistant call
       const last = messages[messages.length - 1];
       const hasCall = last?.role === 'assistant' && 
                       Array.isArray(last.content) && 
                       last.content.some((p: any) => p.type === 'tool-call' && p.toolCallId === activeToolCallId);
 
       if (!hasCall) {
+        console.warn("[REPAIR] Injecting missing tool-call part for sequence integrity.");
         messages.push({
           role: 'assistant',
-          content: [{ 
-            type: 'tool-call', 
-            toolCallId: activeToolCallId, 
-            toolName: 'request_medical_record', 
-            args: { record_id: "auto-repair" } 
-          } as any]
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: activeToolCallId,
+              toolName: 'request_medical_record',
+              args: { record_id: "repaired" }
+            }
+          ]
         });
       }
 
+      // 2. Add the Tool Result correctly
       messages.push({
         role: 'tool',
-        content: [{
-          type: 'tool-result',
-          toolCallId: activeToolCallId,
-          toolName: 'request_medical_record',
-          output: `[SYSTEM DATA] AUTHORIZED ACCESS TO RECORD. CONTENT: ${prompt}`
-        } as any]
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: activeToolCallId,
+            toolName: 'request_medical_record',
+            result: `[Clinical Data Authorized]:\n\n${prompt}`
+          }
+        ]
       });
 
+      // 3. Synthetic User Prompt to force the next step
       messages.push({
         role: 'user',
-        content: "Analyze the clinical record authorized above. Answer my previous question about chest tightness."
+        content: "I have authorized the record. Please analyze the clinical data and answer my previous question."
       });
     } else {
+      // Standard User Input
       if (attachments && attachments.length > 0) {
         messages.push({
           role: 'user',
           content: [
             { type: 'text', text: prompt || "Analyze my status." },
-            ...attachments.map(att => ({ type: 'image' as const, image: att.url }))
+            ...attachments.map(a => ({ type: 'image' as const, image: a.url }))
           ]
         });
       } else {
@@ -119,7 +132,7 @@ export async function POST(req: NextRequest) {
     }
 
     lastAttemptedMessages = messages;
-    console.log("TRACE:", messages.map(m => `[${m.role}]`));
+    console.log("FINAL_AGENT_TRACE:", JSON.stringify(messages.map(m => ({ role: m.role, parts: Array.isArray(m.content) ? m.content.length : 'str' })), null, 2));
 
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
@@ -136,10 +149,7 @@ export async function POST(req: NextRequest) {
       tools: {
         request_medical_record: tool({
           description: "Get medical record",
-          inputSchema: z.object({
-            record_id: z.string(),
-            reason: z.string()
-          })
+          inputSchema: z.object({ record_id: z.string(), reason: z.string() })
         })
       }
     });
@@ -147,7 +157,7 @@ export async function POST(req: NextRequest) {
     return (result as any).toUIMessageStreamResponse();
 
   } catch (error: any) {
-    console.error("CRITICAL ERROR:", error.message);
+    console.error("CRITICAL AGENT ERROR:", error.message);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
