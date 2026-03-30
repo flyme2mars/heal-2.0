@@ -1,8 +1,14 @@
 export interface ChatRequest {
   prompt: string;
-  history?: { role: string; content: string }[];
+  history?: { 
+    role: string; 
+    content: string;
+    toolCalls?: string;
+    toolCallId?: string;
+  }[];
   context: ChatContext;
   attachments?: ChatAttachment[];
+  toolCallId?: string;
 }
 
 export interface ChatAttachment {
