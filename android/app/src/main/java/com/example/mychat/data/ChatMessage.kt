@@ -3,7 +3,7 @@ package com.example.mychat.data
 import java.util.UUID
 
 enum class ChatRole {
-    USER, MODEL, ERROR
+    USER, MODEL, ERROR, ASSISTANT
 }
 
 data class ChatMessage(

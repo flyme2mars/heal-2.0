@@ -245,12 +245,12 @@ fun MessageBubble(message: ChatMessage, onImageClick: (String) -> Unit) {
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val containerColor = when (message.role) {
         ChatRole.USER -> MaterialTheme.colorScheme.primary
-        ChatRole.MODEL -> MaterialTheme.colorScheme.surfaceContainerHigh
+        ChatRole.MODEL, ChatRole.ASSISTANT -> MaterialTheme.colorScheme.surfaceContainerHigh
         else -> MaterialTheme.colorScheme.errorContainer
     }
     val contentColor = when (message.role) {
         ChatRole.USER -> MaterialTheme.colorScheme.onPrimary
-        ChatRole.MODEL -> MaterialTheme.colorScheme.onSurface
+        ChatRole.MODEL, ChatRole.ASSISTANT -> MaterialTheme.colorScheme.onSurface
         else -> MaterialTheme.colorScheme.onErrorContainer
     }
 
