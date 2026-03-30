@@ -16,6 +16,9 @@ import kotlinx.serialization.json.*
 import kotlinx.serialization.encodeToString
 import javax.inject.Inject
 import java.io.ByteArrayOutputStream
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.Date
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
@@ -45,10 +48,7 @@ class ChatViewModel @Inject constructor(
         refreshUserData()
         checkHealthPermissions()
         viewModelScope.launch {
-            val recovered = documentManager.reconcileVault()
-            recovered.forEach { doc ->
-                localIndexer.indexDocument(doc)
-            }
+            documentManager.reconcileVault()
             initializeSession()
         }
     }
@@ -89,7 +89,7 @@ class ChatViewModel @Inject constructor(
                     toolCallId = entity.toolCallId,
                     toolCalls = entity.toolCallsJson
                 )
-            }.filter { it.role != ChatRole.TOOL && it.role != ChatRole.SYSTEM } // Hide internal data from UI but keep in DB
+            }.filter { it.role != ChatRole.TOOL && it.role != ChatRole.SYSTEM }
             _uiState.update { it.copy(messages = messages) }
         }
     }
@@ -119,9 +119,8 @@ class ChatViewModel @Inject constructor(
             _uiState.update { it.copy(isSyncing = true) }
             try {
                 if (healthManager.hasAllPermissions()) {
-                    val summary = healthManager.fetchHealthSummary()
+                    healthManager.fetchHealthSummary()
                     _uiState.update { it.copy(healthPermissionGranted = true) }
-                    // We can also trigger a refresh of other data if needed
                 }
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Health sync failed", e)
@@ -168,7 +167,6 @@ class ChatViewModel @Inject constructor(
         val sessionId = _uiState.value.activeSessionId ?: return
         val imageUri = _uiState.value.selectedImageUri
         
-        // UI: Only add to the list if not hidden
         if (!isHiddenData) {
             val userMessage = ChatMessage(
                 text = userText, 
@@ -182,70 +180,66 @@ class ChatViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            // Persist message with correct role
             val dbRole = when {
                 toolCallId != null -> "tool"
                 isHiddenData -> "system"
                 else -> "user"
             }
             
-            chatDao.insertMessage(ChatMessageEntity(
+            val messageToPersist = ChatMessageEntity(
                 sessionId = sessionId,
                 role = dbRole,
                 content = userText,
                 timestamp = System.currentTimeMillis(),
                 toolCallId = toolCallId
-            ))
+            )
+            chatDao.insertMessage(messageToPersist)
 
-            val modelMessage = ChatMessage(text = "", role = ChatRole.MODEL, isPending = true)
-            // UI: Don't add a new model message if this is a follow-up to a tool approval
+            val modelMessageId = java.util.UUID.randomUUID().toString()
+            val targetId: String
+
             if (!isHiddenData) {
+                val modelMessage = ChatMessage(id = modelMessageId, text = "", role = ChatRole.MODEL, isPending = true)
                 _uiState.update { it.copy(messages = it.messages + modelMessage) }
+                targetId = modelMessageId
             } else {
-                // If it's a follow-up, mark the LAST model message as pending again
-                _uiState.update { state ->
-                    val newList = state.messages.toMutableList()
-                    val lastModel = newList.findLast { it.role == ChatRole.MODEL || it.role == ChatRole.ASSISTANT }
-                    if (lastModel != null) {
-                        val index = newList.indexOf(lastModel)
-                        newList[index] = lastModel.copy(isPending = true, isActionResolved = true, pendingToolCall = null)
+                val lastModel = _uiState.value.messages.findLast { it.role == ChatRole.MODEL || it.role == ChatRole.ASSISTANT }
+                if (lastModel != null) {
+                    targetId = lastModel.id
+                    _uiState.update { state ->
+                        val newList = state.messages.toMutableList()
+                        val idx = newList.indexOfLast { it.id == targetId }
+                        if (idx != -1) {
+                            newList[idx] = newList[idx].copy(isPending = true, isActionResolved = true, pendingToolCall = null)
+                        }
+                        state.copy(messages = newList)
                     }
-                    state.copy(messages = newList)
+                } else {
+                    val modelMessage = ChatMessage(id = modelMessageId, text = "", role = ChatRole.MODEL, isPending = true)
+                    _uiState.update { it.copy(messages = it.messages + modelMessage) }
+                    targetId = modelMessageId
                 }
             }
 
             try {
-                // Determine target message ID for updates
-                val targetId = if (isHiddenData) {
-                   _uiState.value.messages.findLast { it.role == ChatRole.MODEL || it.role == ChatRole.ASSISTANT }?.id ?: modelMessage.id
-                } else modelMessage.id
-
                 val healthSummary = if (healthManager.hasAllPermissions()) healthManager.fetchHealthSummary() else "Permissions not granted."
                 val medicalSummary = medicalRecordManager.getMedicalSummary()
                 val memorySnapshot = documentManager.getMemorySnapshot()
                 
-                // 2026 History Construction: Include Tool Metadata
-                val history = chatDao.getMessagesForSessionList(sessionId).takeLast(20).map { 
-                    val map = mutableMapOf(
-                        "role" to it.role,
-                        "content" to it.content
-                    )
+                val allHistory = chatDao.getMessagesForSessionList(sessionId)
+                val history = allHistory.dropLast(1).takeLast(20).map { 
+                    val map = mutableMapOf("role" to it.role, "content" to it.content)
                     it.toolCallId?.let { id -> map["toolCallId"] = id }
                     it.toolCallsJson?.let { json -> map["toolCalls"] = json }
                     map.toMap()
                 }
 
-                // Discovery Index
                 val docMap = uiState.value.documents.joinToString("\n") { 
-                    "DOCUMENT [ID: ${it.id}] | Label: ${it.userLabel ?: it.name} | Type: ${it.recordType ?: "Unknown"} | Tags: ${it.tags.joinToString(", ")} | Date: ${it.recordDate ?: "No Date"} | AI Summary: ${it.summary}"
+                    "DOCUMENT [ID: ${it.id}] | Label: ${it.userLabel ?: it.name} | Type: ${it.recordType ?: "Unknown"} | Tags: ${it.tags.joinToString(", ")} | AI Summary: ${it.summary}"
                 }
 
                 val attachments = mutableListOf<ChatAttachment>()
-                imageUri?.let { uri ->
-                    uriToBase64(uri)?.let { base64 ->
-                        attachments.add(ChatAttachment(url = base64))
-                    }
-                }
+                imageUri?.let { uri -> uriToBase64(uri)?.let { base64 -> attachments.add(ChatAttachment(url = base64)) } }
 
                 val request = ChatRequest(
                     prompt = userText,
@@ -262,49 +256,24 @@ class ChatViewModel @Inject constructor(
                 val backendUrl = "https://heal-eight.vercel.app/api/chat"
                 val json = Json { ignoreUnknownKeys = true }
                 val requestBody = json.encodeToString(request)
-                
-                var fullResponseText = ""
-                var fullReasoningText = ""
-                var lastUpdateTime = System.currentTimeMillis()
-                
-                // Track tool calls for final persistence
                 val currentToolCalls = mutableListOf<ToolCallInfo>()
 
                 networkClient.streamChat(backendUrl, requestBody, null).collect { event ->
                     when (event) {
-                        is HealEvent.TextDelta -> {
-                            fullResponseText += event.text
-                            if (System.currentTimeMillis() - lastUpdateTime > 50) {
-                                appendToMessage(targetId, event.text, true, reasoningDelta = null)
-                                lastUpdateTime = System.currentTimeMillis()
-                            }
-                        }
-                        is HealEvent.ReasoningDelta -> {
-                            fullReasoningText += event.text
-                            if (System.currentTimeMillis() - lastUpdateTime > 50) {
-                                appendToMessage(targetId, null, true, reasoningDelta = event.text)
-                                lastUpdateTime = System.currentTimeMillis()
-                            }
-                        }
+                        is HealEvent.TextDelta -> appendToMessage(targetId, event.text, true)
+                        is HealEvent.ReasoningDelta -> appendToMessage(targetId, null, true, reasoningDelta = event.text)
                         is HealEvent.ToolCall -> {
-                            val info = ToolCallInfo(event.id, event.name, event.arguments)
-                            currentToolCalls.add(info)
+                            currentToolCalls.add(ToolCallInfo(event.id, event.name, event.arguments))
                             handleToolCall(event, targetId)
                         }
                         is HealEvent.Error -> updateMessage(targetId, "Error: ${event.message}", false, ChatRole.ERROR)
                         is HealEvent.StreamEnd -> {
-                            // Final sync of the full text to ensure DB and UI are perfect
                             val finalState = _uiState.value.messages.find { it.id == targetId }
-                            val finalFullText = (finalState?.text ?: "")
-                            val finalFullReasoning = (finalState?.reasoning ?: "")
-
+                            val finalFullText = finalState?.text ?: ""
+                            val finalFullReasoning = finalState?.reasoning ?: ""
                             updateMessage(targetId, finalFullText, false, reasoning = finalFullReasoning)
                             
-                            // Persist Assistant Message WITH tool calls if any
-                            val toolCallsJson = if (currentToolCalls.isNotEmpty()) {
-                                json.encodeToString(currentToolCalls)
-                            } else null
-
+                            val toolCallsJson = if (currentToolCalls.isNotEmpty()) json.encodeToString(currentToolCalls) else null
                             chatDao.insertMessage(ChatMessageEntity(
                                 sessionId = sessionId,
                                 role = "assistant",
@@ -313,37 +282,23 @@ class ChatViewModel @Inject constructor(
                                 timestamp = System.currentTimeMillis(),
                                 toolCallsJson = toolCallsJson
                             ))
-                            
-                            if (!isHiddenData && uiState.value.messages.size <= 3) {
-                                val newTitle = if (userText.length > 30) userText.take(27) + "..." else userText
-                                chatDao.updateSessionTitle(sessionId, newTitle, System.currentTimeMillis())
-                            }
                         }
                     }
                 }
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Request failed", e)
-                updateMessage(modelMessage.id, "Failed to connect to Heal Agent.", false, ChatRole.ERROR)
+                updateMessage(targetId, "Failed to connect to Heal Agent.", false, ChatRole.ERROR)
             }
         }
     }
 
     private fun handleToolCall(event: HealEvent.ToolCall, messageId: String) {
-        val info = ToolCallInfo(
-            toolCallId = event.id,
-            name = event.name,
-            arguments = event.arguments
-        )
-        
+        val info = ToolCallInfo(toolCallId = event.id, name = event.name, arguments = event.arguments)
         _uiState.update { state ->
             val newList = state.messages.toMutableList()
             val index = newList.indexOfLast { it.id == messageId }
             if (index != -1) {
-                newList[index] = newList[index].copy(
-                    isPending = false,
-                    pendingToolCall = info,
-                    toolCallId = event.id // Store active call ID
-                )
+                newList[index] = newList[index].copy(isPending = false, pendingToolCall = info, toolCallId = event.id)
             }
             state.copy(messages = newList)
         }
@@ -351,26 +306,11 @@ class ChatViewModel @Inject constructor(
 
     fun approveRecord(requestId: String, messageId: String) {
         viewModelScope.launch {
-            val doc = uiState.value.documents.find { it.id == requestId }
-            if (doc == null) {
-                Log.e("ChatViewModel", "Could not find document with ID: $requestId")
-                return@launch
-            }
-            
+            val doc = uiState.value.documents.find { it.id == requestId } ?: return@launch
             val fullText = doc.fullText ?: documentManager.readDocumentText(doc.name)
-            
-            val activeMessage = _uiState.value.messages.find { it.id == messageId }
-            val callId = activeMessage?.pendingToolCall?.toolCallId
-            
-            // Add a small spacer/header to the existing bubble text before continuing
+            val callId = _uiState.value.messages.find { it.id == messageId }?.pendingToolCall?.toolCallId
             appendToMessage(messageId, "\n\n---\n", true)
-
-            // Send as "Tool Result" - continues the session
-            sendMessage(
-                userText = fullText, 
-                isHiddenData = true, 
-                toolCallId = callId
-            )
+            sendMessage(userText = fullText, isHiddenData = true, toolCallId = callId)
         }
     }
 
@@ -417,6 +357,16 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun refreshMedicalSummary() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isSyncing = true) }
+            val recovered = documentManager.reconcileVault()
+            recovered.forEach { localIndexer.indexDocument(it) }
+            refreshUserData()
+            _uiState.update { it.copy(isSyncing = false) }
+        }
+    }
+
     fun uploadDocument(uri: Uri, name: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isSyncing = true) }
@@ -452,32 +402,9 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun refreshMedicalSummary() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isSyncing = true) }
-            val recovered = documentManager.reconcileVault()
-            recovered.forEach { doc ->
-                localIndexer.indexDocument(doc)
-            }
-            refreshUserData()
-            _uiState.update { it.copy(isSyncing = false) }
-        }
-    }
-
     fun deleteDocument(document: HealthDocument) { viewModelScope.launch { documentManager.deleteDocument(document) } }
-    
-    fun updateDocumentLabel(documentId: String, newLabel: String) {
-        viewModelScope.launch {
-            documentManager.updateUserLabel(documentId, newLabel)
-        }
-    }
+    fun updateDocumentLabel(id: String, label: String) { viewModelScope.launch { documentManager.updateUserLabel(id, label) } }
 }
-
-data class PermissionRequest(
-    val id: String,
-    val documentName: String,
-    val reason: String
-)
 
 data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
@@ -487,9 +414,7 @@ data class ChatUiState(
     val healthPermissionGranted: Boolean = false,
     val medicalSummary: String = "No medical records found.",
     val documents: List<HealthDocument> = emptyList(),
-    val pendingApprovals: List<PermissionRequest> = emptyList(),
     val userName: String = "",
     val userWeight: String = "",
     val selectedImageUri: Uri? = null
 )
-
