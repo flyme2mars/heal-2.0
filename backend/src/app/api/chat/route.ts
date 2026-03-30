@@ -8,13 +8,11 @@ export async function POST(req: NextRequest) {
   try {
     console.log("Chat API Request received");
     const body: ChatRequest = await req.json();
-    const { prompt, history, context, attachments } = body;
+    const { prompt, history, context, attachments, toolCallId: activeToolCallId } = body;
 
-    if (!prompt && !attachments?.length) {
-      return NextResponse.json({ error: "Missing prompt or attachment" }, { status: 400 });
+    if (!prompt && !attachments?.length && !activeToolCallId) {
+      return NextResponse.json({ error: "Missing prompt or activeToolCallId" }, { status: 400 });
     }
-
-    const isSystemInjection = prompt?.startsWith("[SYSTEM_INJECTION:");
 
     const systemInstruction = `
       You are Heal 2.0, a professional and friendly health AI agent. 
@@ -23,7 +21,7 @@ export async function POST(req: NextRequest) {
       AGENTIC WORKFLOW:
       1. ALWAYS use 'Thinking' to describe your plan (e.g., "I will check the cardiac report to see your baseline...").
       2. If you need a full record, use 'request_medical_record'. 
-      3. After receiving a tool result (SYSTEM MEMORY UPDATE), you MUST provide a concise synthesis. 
+      3. After receiving a tool result, you MUST provide a concise synthesis. 
       4. NEVER output an empty response after a tool result. 
 
       CURRENT LOCAL VAULT INDEX:
@@ -40,58 +38,71 @@ export async function POST(req: NextRequest) {
     `;
 
     // 2026 Context Engineering: Convert history to AI SDK messages
-    const messages: any[] = (history || []).map((msg, idx) => {
+    const messages: any[] = [];
+
+    (history || []).forEach((msg, idx) => {
       const role = msg.role.toLowerCase();
-      console.log(`HISTORY[${idx}]: role=${role}, hasToolCalls=${!!msg.toolCalls}, toolCallId=${msg.toolCallId}`);
       
-      if (role === 'assistant') {
-        const toolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
-        return {
-          role: 'assistant' as const,
-          content: msg.content || "", 
-          toolCalls: toolCalls?.map((tc: any) => ({
-            type: 'function',
-            id: tc.toolCallId,
-            function: {
-              name: tc.name,
-              arguments: tc.arguments
-            }
-          }))
-        };
+      try {
+        if (role === 'assistant') {
+          const toolCalls = msg.toolCalls ? JSON.parse(msg.toolCalls) : null;
+          messages.push({
+            role: 'assistant' as const,
+            content: msg.content || "", 
+            toolCalls: toolCalls?.map((tc: any) => ({
+              type: 'function',
+              id: tc.toolCallId,
+              function: {
+                name: tc.name,
+                arguments: tc.arguments
+              }
+            }))
+          });
+        } else if (role === 'tool') {
+          messages.push({
+            role: 'tool' as const,
+            content: [
+              {
+                type: 'tool-result',
+                toolCallId: msg.toolCallId,
+                toolName: 'request_medical_record',
+                result: msg.content
+              }
+            ]
+          });
+        } else if (role === 'system') {
+          messages.push({ role: 'system' as const, content: msg.content });
+        } else {
+          messages.push({ role: 'user' as const, content: msg.content });
+        }
+      } catch (e) {
+        console.error(`Error parsing history message at index ${idx}:`, e);
       }
-
-      if (role === 'tool') {
-        return {
-          role: 'tool' as const,
-          content: [
-            {
-              type: 'tool-result',
-              toolCallId: msg.toolCallId,
-              toolName: 'request_medical_record',
-              result: msg.content
-            }
-          ]
-        };
-      }
-
-      if (role === 'system') {
-        return {
-          role: 'system' as const,
-          content: msg.content
-        };
-      }
-
-      // Default to User
-      return {
-        role: 'user' as const,
-        content: msg.content
-      };
     });
 
-    // Handle Current Message
-    const activeToolCallId = (body as any).toolCallId;
+    // CRITICAL FIX: If we have an active tool result, we MUST ensure 
+    // the history ended with an assistant tool call for that ID.
     if (activeToolCallId) {
-      console.log(`>>> ATTACHING TOOL RESULT: ${activeToolCallId}`);
+      const lastMsg = messages[messages.length - 1];
+      const alreadyHasCall = lastMsg?.role === 'assistant' && 
+                             lastMsg.toolCalls?.some((tc: any) => tc.id === activeToolCallId);
+
+      if (!alreadyHasCall) {
+        console.warn(`Sequence Violation Detected: Injecting missing assistant call for ${activeToolCallId}`);
+        messages.push({
+          role: 'assistant' as const,
+          content: "Accessing clinical data...",
+          toolCalls: [{
+            type: 'function',
+            id: activeToolCallId,
+            function: {
+              name: 'request_medical_record',
+              arguments: JSON.stringify({ record_id: "auto-injected" })
+            }
+          }]
+        });
+      }
+
       messages.push({
         role: "tool" as const,
         content: [
@@ -104,16 +115,16 @@ export async function POST(req: NextRequest) {
         ]
       });
       
-      // Force synthesis after tool result by appending an explicit instruction
       messages.push({
         role: "user" as const,
         content: "Please synthesize the information from the record I just provided and answer my previous question."
       });
     } else {
+      // Normal User Message
       messages.push({
         role: "user" as const,
         content: [
-          { type: "text", text: isSystemInjection ? `SYSTEM MEMORY UPDATE: ${prompt}` : prompt || "Please analyze my health status." },
+          { type: "text", text: prompt || "Please analyze my health status." },
           ...(attachments || []).map(att => ({
             type: "image" as const,
             image: att.url,
@@ -122,10 +133,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Log the message sequence for debugging
-    console.log("AGENT_SEQUENCE:", messages.map(m => `[${m.role}] ${Array.isArray(m.content) ? 'PartArray' : m.content?.slice(0, 20)}...`));
+    console.log("FINAL_AGENT_SEQUENCE:", messages.map(m => `[${m.role}] ${m.toolCalls ? 'Calls:' + m.toolCalls.length : ''}`));
 
-    // Use specific content parts for multimodal support
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
       system: systemInstruction,
@@ -164,9 +173,10 @@ export async function POST(req: NextRequest) {
       }
     });
   } catch (error: any) {
-    console.error("PRODUCTION ERROR:", error.stack || error.message);
+    console.error("CRITICAL BACKEND ERROR:", error.stack || error.message);
     return NextResponse.json({ 
-      error: error.message
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     }, { status: 500 });
   }
 }
