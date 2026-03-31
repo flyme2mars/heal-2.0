@@ -141,7 +141,8 @@ fun ChatScreen(
                                 Text(
                                     session.title, 
                                     maxLines = 1, 
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                 ) 
                             },
                             selected = isSelected,
@@ -149,14 +150,33 @@ fun ChatScreen(
                                 viewModel.loadSession(session.id)
                                 scope.launch { drawerState.close() }
                             },
-                            icon = { Icon(if (isSelected) Icons.Default.ChatBubble else Icons.Default.Chat, null, modifier = Modifier.size(18.dp)) },
+                            icon = { 
+                                Icon(
+                                    if (isSelected) Icons.Default.ChatBubble else Icons.Default.ChatBubbleOutline, 
+                                    null, 
+                                    modifier = Modifier.size(20.dp),
+                                    tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                ) 
+                            },
                             badge = {
-                                if (isSelected) {
-                                    IconButton(onClick = { viewModel.deleteSession(session.id) }) {
-                                        Icon(Icons.Default.DeleteOutline, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
-                                    }
+                                IconButton(
+                                    onClick = { viewModel.deleteSession(session.id) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.DeleteOutline, 
+                                        null, 
+                                        Modifier.size(18.dp), 
+                                        tint = if (isSelected) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                    )
                                 }
                             },
+                            colors = NavigationDrawerItemDefaults.colors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                unselectedContainerColor = Color.Transparent,
+                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                unselectedTextColor = MaterialTheme.colorScheme.onSurface
+                            ),
                             modifier = Modifier.padding(vertical = 2.dp)
                         )
                     }

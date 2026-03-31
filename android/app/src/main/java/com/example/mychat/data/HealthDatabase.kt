@@ -97,14 +97,31 @@ interface HealthDocumentDao {
 @Dao
 interface ChatDao {
     // Sessions
+    @Query("""
+        SELECT * FROM chat_sessions 
+        WHERE EXISTS (SELECT 1 FROM chat_messages WHERE sessionId = chat_sessions.id)
+        ORDER BY lastUpdatedAt DESC
+    """)
+    fun getAllNonEmptySessions(): Flow<List<ChatSessionEntity>>
+
     @Query("SELECT * FROM chat_sessions ORDER BY lastUpdatedAt DESC")
     fun getAllSessions(): Flow<List<ChatSessionEntity>>
+
+    @Query("SELECT COUNT(*) FROM chat_messages WHERE sessionId = :sessionId")
+    suspend fun getMessageCount(sessionId: String): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSession(session: ChatSessionEntity)
 
     @Query("DELETE FROM chat_sessions WHERE id = :id")
     suspend fun deleteSession(id: String)
+
+    @Query("""
+        DELETE FROM chat_sessions 
+        WHERE NOT EXISTS (SELECT 1 FROM chat_messages WHERE sessionId = chat_sessions.id)
+        AND id != :activeSessionId
+    """)
+    suspend fun deleteEmptySessions(activeSessionId: String)
 
     @Query("UPDATE chat_sessions SET title = :title, lastUpdatedAt = :timestamp WHERE id = :id")
     suspend fun updateSessionTitle(id: String, title: String, timestamp: Long)

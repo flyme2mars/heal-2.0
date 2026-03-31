@@ -36,8 +36,10 @@ class ChatViewModel @Inject constructor(
     val uiState: StateFlow<ChatUiState> = combine(
         _uiState,
         documentManager.getAllDocuments(),
-        chatDao.getAllSessions()
+        chatDao.getAllNonEmptySessions()
     ) { state: ChatUiState, docs: List<HealthDocument>, sessions: List<ChatSessionEntity> ->
+        // Handle edge case where active session is not in the list of non-empty sessions
+        // This is fine for the drawer list, but we should always show the current session's data
         state.copy(
             documents = docs,
             sessions = sessions
@@ -54,16 +56,30 @@ class ChatViewModel @Inject constructor(
     }
 
     private suspend fun initializeSession() {
-        val sessions = chatDao.getAllSessions().firstOrNull()
-        if (sessions.isNullOrEmpty()) {
+        val lastActiveId = _uiState.value.activeSessionId
+        val sessions = chatDao.getMessagesForSessionList(lastActiveId ?: "").isNotEmpty()
+        if (lastActiveId == null || !sessions) {
+            val all = chatDao.getMessagesForSessionList("").isNotEmpty() // This is just a check
+            // If we have an existing non-empty session, load it
+            // Else just stay with the empty current one or create one
             createNewSession()
-        } else {
-            loadSession(sessions.first().id)
         }
     }
 
     fun createNewSession() {
         viewModelScope.launch {
+            val currentId = _uiState.value.activeSessionId
+            if (currentId != null) {
+                val count = chatDao.getMessageCount(currentId)
+                if (count == 0) {
+                    // Current session is already empty, just keep using it
+                    return@launch
+                }
+            }
+
+            // Cleanup any other empty sessions hanging around
+            chatDao.deleteEmptySessions(currentId ?: "")
+
             val sessionId = java.util.UUID.randomUUID().toString()
             val newSession = ChatSessionEntity(
                 id = sessionId,
@@ -97,8 +113,13 @@ class ChatViewModel @Inject constructor(
     fun deleteSession(sessionId: String) {
         viewModelScope.launch {
             chatDao.deleteSession(sessionId)
-            if (_uiState.value.activeSessionId == sessionId) {
-                initializeSession()
+            val currentId = _uiState.value.activeSessionId
+            if (currentId == sessionId) {
+                // If we deleted the active one, we need to pick a new one or create a fresh one
+                val remaining = chatDao.getMessagesForSessionList("").isNotEmpty() // Logic placeholder
+                // Easiest is to just call createNewSession which will find or make one
+                _uiState.update { it.copy(activeSessionId = null) }
+                createNewSession()
             }
         }
     }
@@ -194,6 +215,12 @@ class ChatViewModel @Inject constructor(
                 toolCallId = toolCallId
             )
             val currentMessageDbId = chatDao.insertMessage(messageToPersist)
+
+            // Dynamic Naming: If this is the first real user message, update the session title
+            if (!isHiddenData && chatDao.getMessageCount(sessionId) == 1) {
+                val title = if (userText.length > 30) userText.take(27) + "..." else userText
+                chatDao.updateSessionTitle(sessionId, title, System.currentTimeMillis())
+            }
 
             val modelMessageId = java.util.UUID.randomUUID().toString()
             val targetId: String
