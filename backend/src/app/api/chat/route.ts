@@ -18,25 +18,25 @@ export async function POST(req: NextRequest) {
     const vaultIndex = context.fhir_records?.find(r => r.startsWith("LOCAL VAULT INDEX:")) || "No records in vault.";
 
     const systemInstruction = `
-      You are Heal 2.0, a clinical AI agent specializing in medical record synthesis and wearable data analysis.
+      You are Heal 2.0, a clinical AI agent. 
       
-      CURRENT USER DATA (Already Provided - DO NOT ASK FOR PERMISSION TO SEE THESE):
+      USER DATA (ALREADY AUTHORIZED - USE THESE DIRECTLY):
       - VITALS/WEARABLES: ${healthSummary}
       - MEDICAL SUMMARY: ${medicalSummary}
       
-      VAULT INDEX (Request permission only if you need full details of a specific record listed here):
+      VAULT INDEX (List of records in the user's private vault):
       ${vaultIndex}
 
-      CRITICAL GUIDELINES:
-      1. VITALS & SUMMARY: Use the vitals and medical summary provided above to answer health questions immediately. They are already authorized.
-      2. RECORD ACCESS: Use 'request_medical_record' ONLY if you need to read the full text of a specific document listed in the VAULT INDEX that is directly relevant to the user's query.
-      3. NON-EXISTENT RECORDS: If the user asks about a condition (e.g., headache) and no related record exists in the VAULT INDEX, state that you don't see any specific records for that in the vault, but analyze their provided vitals if helpful.
-      4. DO NOT loop permissions for data you already have.
+      DIAGNOSTIC GUIDELINES:
+      1. USE PROVIDED DATA: For questions about vitals, wearables, or general medical history, use the 'USER DATA' section above. DO NOT use 'request_medical_record' for this data.
+      2. RECORD ACCESS: Use 'request_medical_record' ONLY if you need the full text of a specific document listed in the 'VAULT INDEX' that is highly relevant to the user's query.
+      3. MISSING RECORDS: If the user asks about a condition (e.g., headache) and no related record exists in the VAULT INDEX, state clearly: "I don't see any specific medical records regarding [condition] in your vault." Then, analyze their available vitals to see if they offer any insights.
+      4. DO NOT LOOP: Never ask for permission to access data you already have or that clearly doesn't exist.
     `;
 
     const messages: ModelMessage[] = [];
 
-    // Map history
+    // Map history with AI SDK 6.0 standards
     (history || []).forEach((msg, idx) => {
       const role = msg.role.toLowerCase();
       try {
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
           
           if (rawToolCalls && Array.isArray(rawToolCalls) && rawToolCalls.length > 0) {
             const parts: any[] = [];
-            // In 6.0, we must avoid empty text parts if tool calls exist
+            // In 6.0, assistant messages with tool calls SHOULD NOT have empty text parts.
             if (msg.content && msg.content.trim().length > 0) {
               parts.push({ type: 'text', text: msg.content });
             }
@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
                 type: 'tool-result',
                 toolCallId: msg.toolCallId || "unknown",
                 toolName: 'request_medical_record',
-                result: msg.content // Fallback check: AI SDK 6.0 might prefer 'result' vs 'output' depending on sub-version
+                output: { type: 'text', value: msg.content }
               }
             ]
           } as any);
@@ -94,10 +94,6 @@ export async function POST(req: NextRequest) {
 
     // Handle Current Turn
     if (activeToolCallId) {
-      // Find the signature from the history
-      const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
-      const signature = (lastAssistant as any)?.providerMetadata?.google?.thoughtSignature;
-
       messages.push({
         role: 'tool',
         content: [
@@ -105,14 +101,14 @@ export async function POST(req: NextRequest) {
             type: 'tool-result',
             toolCallId: activeToolCallId,
             toolName: 'request_medical_record',
-            result: `[AUTHORIZED RECORD CONTENT]:\n\n${prompt}`
+            output: { type: 'text', value: `[AUTHORIZED RECORD CONTENT]:\n\n${prompt}` }
           }
         ]
       } as any);
 
       messages.push({
         role: 'user',
-        content: "I have provided the record. Please analyze it and provide your clinical synthesis."
+        content: "Analyze the authorized record and provide clinical synthesis."
       });
     } else {
       if (attachments && attachments.length > 0) {
@@ -128,20 +124,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Sequence Repair: Ensure tool results follow tool calls
-    const repairedMessages: ModelMessage[] = [];
-    messages.forEach((m, i) => {
-      if (m.role === 'tool' && repairedMessages[repairedMessages.length - 1]?.role !== 'assistant') {
-        // Inject a dummy assistant call if missing (Gemini safety)
-        console.warn("Sequence Repair: Tool result without assistant call detected.");
-      }
-      repairedMessages.push(m);
-    });
-
     const result = streamText({
       model: google("gemini-3.1-flash-lite-preview"),
       system: systemInstruction,
-      messages: repairedMessages,
+      messages: messages,
       providerOptions: {
         google: {
           thinkingConfig: {
@@ -152,10 +138,10 @@ export async function POST(req: NextRequest) {
       },
       tools: {
         request_medical_record: tool({
-          description: "Get the full text of a specific medical record from the vault by its ID.",
-          parameters: z.object({ 
+          description: "Retrieve the full text of a document from the private vault using its ID.",
+          inputSchema: z.object({ 
             record_id: z.string().describe("The ID of the record from the VAULT INDEX."), 
-            reason: z.string().describe("Clinical reason for accessing this specific record.") 
+            reason: z.string().describe("Clinical justification for reading this record.") 
           })
         })
       }
@@ -164,7 +150,7 @@ export async function POST(req: NextRequest) {
     return (result as any).toUIMessageStreamResponse();
 
   } catch (error: any) {
-    console.error("PRE-FLIGHT ERROR:", error);
+    console.error("AGENT_POST_ERROR:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
