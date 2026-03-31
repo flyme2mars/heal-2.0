@@ -37,6 +37,21 @@ android {
                 "proguard-rules.pro"
             )
             signingConfig = signingConfigs.getByName("debug") // Use debug key for now so it's easy to test
+            
+            // Added ABI filters to keep only the most common architectures
+            ndk {
+                abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+            }
+        }
+    }
+
+    splits {
+        // Configures multiple APKs based on ABI.
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = true // Generate a universal APK as well
         }
     }
 
